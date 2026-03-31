@@ -4,6 +4,8 @@ from discord.ext import commands
 import asyncio
 import os
 import json
+from flask import Flask
+from threading import Thread
 from datetime import datetime, timezone, timedelta
 import pytz
 import time
@@ -58,13 +60,13 @@ def init_top10_db():
     
     for position in positions:
         c.execute(f'''CREATE TABLE IF NOT EXISTS top10_{position}
-                      (rank INTEGER PRIMARY KEY,
-                       player_name TEXT,
-                       card_name TEXT,
-                       rating INTEGER,
-                       special TEXT,
-                       updated_by TEXT,
-                       updated_at TIMESTAMP)''')
+                     (rank INTEGER PRIMARY KEY,
+                      player_name TEXT,
+                      card_name TEXT,
+                      rating INTEGER,
+                      special TEXT,
+                      updated_by TEXT,
+                      updated_at TIMESTAMP)''')
         
         # Check if table is empty, insert default placeholders
         c.execute(f"SELECT COUNT(*) FROM top10_{position}")
@@ -238,6 +240,25 @@ def cancel_announcement(announcement_id, created_by):
     conn.close()
     return rows_affected > 0
 
+# Keep-alive server for 24/7 hosting
+app = Flask('')
+
+@app.route('/')
+def home():
+    try:
+        latency = round(bot.latency * 1000) if hasattr(bot, 'latency') and bot.latency else 0
+        servers = len(bot.guilds) if hasattr(bot, 'guilds') else 0
+        return f"⚡ Ω Lite is running! Servers: {servers} | Latency: {latency}ms"
+    except:
+        return "⚡ Ω Lite is starting up... Please wait a moment."
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
 # Load formations data
 def load_formations():
     try:
@@ -373,9 +394,27 @@ class FCOHomiesBot(commands.Bot):
         self.lfm_role_id = 1391787410182111456
 
     async def setup_hook(self):
-        # REMOVED AUTO-SYNC TO PREVENT CLOUDFLARE 429 RATE LIMITS
-        print("🔄 Setup hook complete. Use `/sync` in Discord if you added new commands.")
-        pass
+        # Wait to avoid rate limits on startup
+        print("🔄 Waiting 5 seconds before syncing commands to avoid rate limits...")
+        await asyncio.sleep(5)
+        print("🔄 Syncing slash commands...")
+        try:
+            synced = await self.tree.sync()
+            print(f"✅ Slash commands synced globally! {len(synced)} commands loaded.")
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print("⚠️ Rate limited while syncing commands. Will retry later.")
+                # Retry after 10 seconds
+                await asyncio.sleep(10)
+                try:
+                    synced = await self.tree.sync()
+                    print(f"✅ Slash commands synced on retry! {len(synced)} commands loaded.")
+                except Exception as retry_error:
+                    print(f"❌ Still rate limited: {retry_error}")
+            else:
+                print(f"❌ Error syncing commands: {e}")
+        except Exception as e:
+            print(f"❌ Error syncing commands: {e}")
 
 bot = FCOHomiesBot()
 
@@ -385,13 +424,28 @@ async def on_ready():
     print(f'📊 Connected to {len(bot.guilds)} servers')
     print(f'🔧 User: {bot.user}')
     print(f'🆔 ID: {bot.user.id}')
-    print(f'🔄 Slash commands: Active (Use /sync if missing)')
+    print(f'🔄 Slash commands: Active')
     print(f'📢 Announcement system: Active')
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🏆 Top 10 Players system: Active')
     print(f'💾 Backup/Restore system: Active')
     
     bot.loop.create_task(check_announcements())
+    
+    # Wait a bit before fetching commands to avoid rate limits
+    await asyncio.sleep(3)
+    try:
+        commands = await bot.tree.fetch_commands()
+        print(f"📝 Global commands registered: {len(commands)}")
+        for cmd in commands:
+            print(f"  - /{cmd.name}")
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            print("⚠️ Rate limited while fetching commands. Will try later.")
+        else:
+            print(f"⚠️ Could not fetch commands: {e}")
+    except Exception as e:
+        print(f"⚠️ Could not fetch commands: {e}")
     
     await bot.change_presence(activity=discord.Activity(
         type=discord.ActivityType.playing, 
@@ -1377,6 +1431,8 @@ async def help_command(interaction: discord.Interaction):
 # ========== START BOT ==========
 
 if __name__ == "__main__":
+    # Start Flask server for Render
+    keep_alive()
     
     # Get bot token
     token = os.getenv('BOT_TOKEN')
@@ -1385,7 +1441,7 @@ if __name__ == "__main__":
         sys.exit(1)
     
     print("🚀 Starting bot...")
-    print("🌐 Starting Ω Lite on HeavenCloud...")
+    print("🌐 Starting Ω Lite on Render...")
     print("🏆 Top 10 Players system: ACTIVE")
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
