@@ -15,6 +15,7 @@ import re
 import io
 import sys
 import signal
+import aiohttp  # Add this import for self-pinging
 
 # ========== DATABASE SETUP ==========
 
@@ -259,6 +260,22 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
+# ========== SELF-PING FUNCTION TO KEEP BOT ALIVE ==========
+async def self_ping():
+    """Ping the Flask server every 2 minutes to keep the bot alive on Render's free tier"""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get('http://localhost:8080/') as response:
+                    if response.status == 200:
+                        print(f"🔄 Self-ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
+                    else:
+                        print(f"⚠️ Self-ping returned status: {response.status}")
+        except Exception as e:
+            print(f"⚠️ Self-ping failed: {e}")
+        await asyncio.sleep(120)  # Ping every 2 minutes (120 seconds)
+
 # Load formations data
 def load_formations():
     try:
@@ -429,8 +446,10 @@ async def on_ready():
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🏆 Top 10 Players system: Active')
     print(f'💾 Backup/Restore system: Active')
+    print(f'🔄 Self-ping system: Active (every 2 minutes)')
     
     bot.loop.create_task(check_announcements())
+    bot.loop.create_task(self_ping())  # Start self-pinging to keep bot alive
     
     # Wait a bit before fetching commands to avoid rate limits
     await asyncio.sleep(3)
@@ -1445,6 +1464,7 @@ if __name__ == "__main__":
     print("🏆 Top 10 Players system: ACTIVE")
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
+    print("🔄 Self-ping system: ACTIVE (every 2 minutes)")
     
     # Handle graceful shutdown
     def signal_handler(sig, frame):
