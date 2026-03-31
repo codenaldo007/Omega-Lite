@@ -15,7 +15,7 @@ import re
 import io
 import sys
 import signal
-import aiohttp  # Add this import for self-pinging
+import aiohttp
 
 # ========== DATABASE SETUP ==========
 
@@ -254,27 +254,35 @@ def home():
         return "⚡ Ω Lite is starting up... Please wait a moment."
 
 def run():
-    app.run(host='0.0.0.0', port=8080)
+    # Use Render's provided PORT environment variable, fallback to 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
+    t.daemon = True # Ensures thread closes cleanly when bot stops
     t.start()
 
 # ========== SELF-PING FUNCTION TO KEEP BOT ALIVE ==========
 async def self_ping():
-    """Ping the Flask server every 2 minutes to keep the bot alive on Render's free tier"""
+    """Ping the external URL every 14 minutes to trick Render's idle detector"""
     await bot.wait_until_ready()
+    
+    # NOTE: Set this environment variable in Render, or replace the fallback string with your actual URL
+    RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
+    
     while not bot.is_closed():
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get('http://localhost:8080/') as response:
+                async with session.get(RENDER_EXTERNAL_URL) as response:
                     if response.status == 200:
-                        print(f"🔄 Self-ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
+                        print(f"🔄 External ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
                     else:
-                        print(f"⚠️ Self-ping returned status: {response.status}")
+                        print(f"⚠️ External ping returned status: {response.status}")
         except Exception as e:
-            print(f"⚠️ Self-ping failed: {e}")
-        await asyncio.sleep(120)  # Ping every 2 minutes (120 seconds)
+            print(f"⚠️ External ping failed: {e}. Ensure RENDER_EXTERNAL_URL is correct.")
+        
+        await asyncio.sleep(840)  # Ping every 14 minutes (840 seconds). Render sleeps at 15m.
 
 # Load formations data
 def load_formations():
@@ -446,7 +454,7 @@ async def on_ready():
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🏆 Top 10 Players system: Active')
     print(f'💾 Backup/Restore system: Active')
-    print(f'🔄 Self-ping system: Active (every 2 minutes)')
+    print(f'🔄 Self-ping system: Active (every 14 minutes)')
     
     bot.loop.create_task(check_announcements())
     bot.loop.create_task(self_ping())  # Start self-pinging to keep bot alive
@@ -1464,7 +1472,7 @@ if __name__ == "__main__":
     print("🏆 Top 10 Players system: ACTIVE")
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
-    print("🔄 Self-ping system: ACTIVE (every 2 minutes)")
+    print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     
     # Handle graceful shutdown
     def signal_handler(sig, frame):
