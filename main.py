@@ -42,7 +42,7 @@ def init_lfm_db():
     conn = sqlite3.connect('lfm.db')
     c = conn.cursor()
     
-    # LFM cooldown table
+    # LFM cooldown table (5 minutes = 300 seconds)
     c.execute('''CREATE TABLE IF NOT EXISTS lfm_global_cooldown
                  (id INTEGER PRIMARY KEY CHECK (id = 1),
                   last_used TIMESTAMP,
@@ -51,7 +51,7 @@ def init_lfm_db():
     c.execute("INSERT OR IGNORE INTO lfm_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
               (datetime.now().isoformat(), "0", "None"))
     
-    # SquadHelp cooldown table
+    # SquadHelp cooldown table (15 minutes = 900 seconds)
     c.execute('''CREATE TABLE IF NOT EXISTS squadhelp_global_cooldown
                  (id INTEGER PRIMARY KEY CHECK (id = 1),
                   last_used TIMESTAMP,
@@ -60,7 +60,7 @@ def init_lfm_db():
     c.execute("INSERT OR IGNORE INTO squadhelp_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
               (datetime.now().isoformat(), "0", "None"))
     
-    # DRHelp cooldown table
+    # DRHelp cooldown table (5 minutes = 300 seconds)
     c.execute('''CREATE TABLE IF NOT EXISTS drhelp_global_cooldown
                  (id INTEGER PRIMARY KEY CHECK (id = 1),
                   last_used TIMESTAMP,
@@ -153,7 +153,7 @@ def swap_top10_entries(position, rank1, rank2):
     conn.close()
     return False
 
-# LFM Global Cooldown functions
+# LFM Global Cooldown functions (5 minutes)
 def check_lfm_global_cooldown():
     """Check if LFM is on global cooldown"""
     conn = sqlite3.connect('lfm.db')
@@ -167,7 +167,7 @@ def check_lfm_global_cooldown():
         last_user_id = result[1]
         last_user_name = result[2]
         time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 300:
+        if time_passed.total_seconds() < 300:  # 5 minutes
             remaining = 300 - time_passed.total_seconds()
             return True, remaining, last_user_id, last_user_name
     return False, 0, None, None
@@ -182,7 +182,7 @@ def update_lfm_global_cooldown(user_id, user_name):
     conn.commit()
     conn.close()
 
-# SquadHelp Global Cooldown functions
+# SquadHelp Global Cooldown functions (15 minutes)
 def check_squadhelp_global_cooldown():
     """Check if SquadHelp is on global cooldown"""
     conn = sqlite3.connect('lfm.db')
@@ -196,8 +196,8 @@ def check_squadhelp_global_cooldown():
         last_user_id = result[1]
         last_user_name = result[2]
         time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 300:
-            remaining = 300 - time_passed.total_seconds()
+        if time_passed.total_seconds() < 900:  # 15 minutes
+            remaining = 900 - time_passed.total_seconds()
             return True, remaining, last_user_id, last_user_name
     return False, 0, None, None
 
@@ -211,7 +211,7 @@ def update_squadhelp_global_cooldown(user_id, user_name):
     conn.commit()
     conn.close()
 
-# DRHelp Global Cooldown functions
+# DRHelp Global Cooldown functions (5 minutes)
 def check_drhelp_global_cooldown():
     """Check if DRHelp is on global cooldown"""
     conn = sqlite3.connect('lfm.db')
@@ -225,7 +225,7 @@ def check_drhelp_global_cooldown():
         last_user_id = result[1]
         last_user_name = result[2]
         time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 300:
+        if time_passed.total_seconds() < 300:  # 5 minutes
             remaining = 300 - time_passed.total_seconds()
             return True, remaining, last_user_id, last_user_name
     return False, 0, None, None
@@ -533,7 +533,7 @@ async def on_ready():
     print(f'🔄 Slash commands: Active')
     print(f'📢 Announcement system: Active')
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
-    print(f'🛡️ SquadHelp system: Active (5-min GLOBAL cooldown)')
+    print(f'🛡️ SquadHelp system: Active (15-min GLOBAL cooldown)')
     print(f'⚔️ DRHelp system: Active (5-min GLOBAL cooldown)')
     print(f'🏆 Top 10 Players system: Active')
     print(f'💾 Backup/Restore system: Active')
@@ -1049,7 +1049,7 @@ async def lfm_command(interaction: discord.Interaction):
             )
             embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
             embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
-            embed.set_footer(text="Ω Lite | LFM System")
+            embed.set_footer(text="Ω Lite | LFM System (5-min cooldown)")
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
@@ -1126,12 +1126,12 @@ async def lfm_status_check(interaction: discord.Interaction):
             color=0x10B981
         )
     
-    embed.set_footer(text="Ω Lite | LFM System")
+    embed.set_footer(text="Ω Lite | LFM System (5-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ========== SQUADHELP COMMAND ==========
+# ========== SQUADHELP COMMAND (15 MINUTE COOLDOWN) ==========
 
-@bot.tree.command(name="squadhelp", description="Request help with your squad - Pings the SquadHelp role (5-min GLOBAL cooldown)")
+@bot.tree.command(name="squadhelp", description="Request help with your squad - Pings the SquadHelp role (15-min GLOBAL cooldown)")
 async def squadhelp_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
@@ -1152,7 +1152,7 @@ async def squadhelp_command(interaction: discord.Interaction):
             )
             embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
             embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
-            embed.set_footer(text="Ω Lite | SquadHelp System")
+            embed.set_footer(text="Ω Lite | SquadHelp System (15-min cooldown)")
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
@@ -1176,7 +1176,7 @@ async def squadhelp_command(interaction: discord.Interaction):
             inline=False
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.set_footer(text="Ω Lite | SquadHelp System (5-min global cooldown)")
+        embed.set_footer(text="Ω Lite | SquadHelp System (15-min global cooldown)")
         
         await interaction.channel.send(content=f"{squadhelp_role.mention}", embed=embed)
         update_squadhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
@@ -1188,12 +1188,12 @@ async def squadhelp_command(interaction: discord.Interaction):
         )
         confirm_embed.add_field(
             name="🌍 Global Cooldown", 
-            value="SquadHelp is now on cooldown for **5 minutes** for EVERYONE", 
+            value="SquadHelp is now on cooldown for **15 minutes** for EVERYONE", 
             inline=False
         )
         confirm_embed.add_field(
             name="Next use",
-            value=f"<t:{int((datetime.now() + timedelta(minutes=5)).timestamp())}:R>",
+            value=f"<t:{int((datetime.now() + timedelta(minutes=15)).timestamp())}:R>",
             inline=False
         )
         await interaction.followup.send(embed=confirm_embed, ephemeral=True)
@@ -1229,7 +1229,7 @@ async def squadhelp_status_check(interaction: discord.Interaction):
             color=0x3B82F6
         )
     
-    embed.set_footer(text="Ω Lite | SquadHelp System")
+    embed.set_footer(text="Ω Lite | SquadHelp System (15-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== DRHELP COMMAND ==========
@@ -1255,7 +1255,7 @@ async def drhelp_command(interaction: discord.Interaction):
             )
             embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
             embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
-            embed.set_footer(text="Ω Lite | DRHelp System")
+            embed.set_footer(text="Ω Lite | DRHelp System (5-min cooldown)")
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
@@ -1332,7 +1332,7 @@ async def drhelp_status_check(interaction: discord.Interaction):
             color=0xEF4444
         )
     
-    embed.set_footer(text="Ω Lite | DRHelp System")
+    embed.set_footer(text="Ω Lite | DRHelp System (5-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== OVR COMMAND ==========
@@ -1713,7 +1713,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🎮 **Ping Roles**",
-        value="`/lfm` - Looking for match (5-min cooldown)\n`/lfm_status` - Check LFM cooldown\n`/squadhelp` - Squad help request (5-min cooldown)\n`/squadhelp_status` - Check SquadHelp cooldown\n`/drhelp` - Division Rivals help (5-min cooldown)\n`/drhelp_status` - Check DRHelp cooldown",
+        value="`/lfm` - Looking for match (5-min cooldown)\n`/lfm_status` - Check LFM cooldown\n`/squadhelp` - Squad help request (15-min cooldown)\n`/squadhelp_status` - Check SquadHelp cooldown\n`/drhelp` - Division Rivals help (5-min cooldown)\n`/drhelp_status` - Check DRHelp cooldown",
         inline=False
     )
     
@@ -1768,7 +1768,7 @@ if __name__ == "__main__":
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
     print("🎮 LFM system: ACTIVE (5-min cooldown)")
-    print("🛡️ SquadHelp system: ACTIVE (5-min cooldown)")
+    print("🛡️ SquadHelp system: ACTIVE (15-min cooldown)")
     print("⚔️ DRHelp system: ACTIVE (5-min cooldown)")
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     
