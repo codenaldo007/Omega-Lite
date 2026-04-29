@@ -320,49 +320,6 @@ def cancel_announcement(announcement_id, created_by):
     conn.close()
     return rows_affected > 0
 
-# Keep-alive server for 24/7 hosting
-app = Flask('')
-
-@app.route('/')
-def home():
-    try:
-        latency = round(bot.latency * 1000) if hasattr(bot, 'latency') and bot.latency else 0
-        servers = len(bot.guilds) if hasattr(bot, 'guilds') else 0
-        return f"⚡ Ω Lite is running! Servers: {servers} | Latency: {latency}ms"
-    except:
-        return "⚡ Ω Lite is starting up... Please wait a moment."
-
-def run():
-    # Use Render's provided PORT environment variable, fallback to 8080
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.daemon = True # Ensures thread closes cleanly when bot stops
-    t.start()
-
-# ========== SELF-PING FUNCTION TO KEEP BOT ALIVE ==========
-async def self_ping():
-    """Ping the external URL every 14 minutes to trick Render's idle detector"""
-    await bot.wait_until_ready()
-    
-    # NOTE: Set this environment variable in Render, or replace the fallback string with your actual URL
-    RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
-    
-    while not bot.is_closed():
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(RENDER_EXTERNAL_URL) as response:
-                    if response.status == 200:
-                        print(f"🔄 External ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
-                    else:
-                        print(f"⚠️ External ping returned status: {response.status}")
-        except Exception as e:
-            print(f"⚠️ External ping failed: {e}. Ensure RENDER_EXTERNAL_URL is correct.")
-        
-        await asyncio.sleep(840)  # Ping every 14 minutes (840 seconds). Render sleeps at 15m.
-
 # Load formations data
 def load_formations():
     try:
@@ -562,100 +519,26 @@ async def on_ready():
         name="Ω Lite | /help"
     ))
 
-# ========== BACKUP AND RESTORE COMMANDS ==========
-
-@bot.tree.command(name="backup", description="Download all database files for backup")
-async def backup_command(interaction: discord.Interaction):
-    """Download all database files for backup"""
-    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
-        await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
-        return
+# ========== SELF-PING FUNCTION TO KEEP BOT ALIVE ==========
+async def self_ping():
+    """Ping the external URL every 14 minutes to trick Render's idle detector"""
+    await bot.wait_until_ready()
     
-    await interaction.response.defer()
+    # NOTE: Set this environment variable in Render, or replace the fallback string with your actual URL
+    RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
     
-    files_to_backup = ['top10.db', 'announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json']
-    backup_files = []
-    
-    for file in files_to_backup:
-        if os.path.exists(file):
-            backup_files.append(discord.File(file))
-    
-    if backup_files:
-        embed = discord.Embed(
-            title="📦 Backup Complete",
-            description=f"**Time:** <t:{int(datetime.now().timestamp())}:F>\n**Files:** {len(backup_files)}",
-            color=0x10B981
-        )
-        embed.add_field(name="Files included", value="\n".join([f"• {f}" for f in files_to_backup if os.path.exists(f)]), inline=False)
-        embed.add_field(name="💡 Restore", value="Use `/restore` with these files to restore your data", inline=False)
-        embed.set_footer(text="Ω Lite | Save these files safely!")
-        
-        await interaction.followup.send(embed=embed, files=backup_files)
-    else:
-        await interaction.followup.send("❌ No backup files found!", ephemeral=True)
-
-@bot.tree.command(name="restore", description="Restore database files from backup")
-async def restore_command(interaction: discord.Interaction, file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None, file4: discord.Attachment = None, file5: discord.Attachment = None):
-    """Restore database files from uploaded backup files"""
-    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
-        await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    files = [f for f in [file1, file2, file3, file4, file5] if f is not None]
-    
-    if not files:
-        await interaction.followup.send(
-            "❌ Please attach files to restore!\n\n"
-            "**Usage:** `/restore file1:top10.db file2:announcements.db`\n"
-            "You can restore up to 5 files at once.",
-            ephemeral=True
-        )
-        return
-    
-    restored_files = []
-    failed_files = []
-    
-    for attachment in files:
-        # Check if it's a valid backup file
-        valid_extensions = ['.db', '.json']
-        if not any(attachment.filename.endswith(ext) for ext in valid_extensions):
-            failed_files.append(f"{attachment.filename} (invalid file type)")
-            continue
-        
+    while not bot.is_closed():
         try:
-            # Download the file
-            file_data = await attachment.read()
-            
-            # Save to current directory
-            with open(attachment.filename, 'wb') as f:
-                f.write(file_data)
-            
-            restored_files.append(attachment.filename)
-            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(RENDER_EXTERNAL_URL) as response:
+                    if response.status == 200:
+                        print(f"🔄 External ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
+                    else:
+                        print(f"⚠️ External ping returned status: {response.status}")
         except Exception as e:
-            failed_files.append(f"{attachment.filename} ({str(e)})")
-    
-    # Create result embed
-    embed = discord.Embed(
-        title="🔄 Restore Results",
-        color=0x10B981 if restored_files else 0xDC2626,
-        timestamp=datetime.now()
-    )
-    
-    if restored_files:
-        embed.add_field(name="✅ Restored", value="\n".join([f"• {f}" for f in restored_files]), inline=False)
-    
-    if failed_files:
-        embed.add_field(name="❌ Failed", value="\n".join(failed_files), inline=False)
-    
-    if restored_files:
-        embed.add_field(name="⚠️ Important", value="Restart the bot for changes to take full effect!", inline=False)
-    
-    embed.set_footer(text="Ω Lite | Restore Complete")
-    
-    await interaction.followup.send(embed=embed, ephemeral=True)
+            print(f"⚠️ External ping failed: {e}. Ensure RENDER_EXTERNAL_URL is correct.")
+        
+        await asyncio.sleep(840)  # Ping every 14 minutes (840 seconds). Render sleeps at 15m.
 
 # ========== ANNOUNCEMENT BACKGROUND TASK ==========
 
@@ -1683,6 +1566,101 @@ async def timezone_help(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite")
     await interaction.response.send_message(embed=embed)
 
+# ========== BACKUP AND RESTORE COMMANDS ==========
+
+@bot.tree.command(name="backup", description="Download all database files for backup")
+async def backup_command(interaction: discord.Interaction):
+    """Download all database files for backup"""
+    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
+        await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    files_to_backup = ['top10.db', 'announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json']
+    backup_files = []
+    
+    for file in files_to_backup:
+        if os.path.exists(file):
+            backup_files.append(discord.File(file))
+    
+    if backup_files:
+        embed = discord.Embed(
+            title="📦 Backup Complete",
+            description=f"**Time:** <t:{int(datetime.now().timestamp())}:F>\n**Files:** {len(backup_files)}",
+            color=0x10B981
+        )
+        embed.add_field(name="Files included", value="\n".join([f"• {f}" for f in files_to_backup if os.path.exists(f)]), inline=False)
+        embed.add_field(name="💡 Restore", value="Use `/restore` with these files to restore your data", inline=False)
+        embed.set_footer(text="Ω Lite | Save these files safely!")
+        
+        await interaction.followup.send(embed=embed, files=backup_files)
+    else:
+        await interaction.followup.send("❌ No backup files found!", ephemeral=True)
+
+@bot.tree.command(name="restore", description="Restore database files from backup")
+async def restore_command(interaction: discord.Interaction, file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None, file4: discord.Attachment = None, file5: discord.Attachment = None):
+    """Restore database files from uploaded backup files"""
+    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
+        await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    files = [f for f in [file1, file2, file3, file4, file5] if f is not None]
+    
+    if not files:
+        await interaction.followup.send(
+            "❌ Please attach files to restore!\n\n"
+            "**Usage:** `/restore file1:top10.db file2:announcements.db`\n"
+            "You can restore up to 5 files at once.",
+            ephemeral=True
+        )
+        return
+    
+    restored_files = []
+    failed_files = []
+    
+    for attachment in files:
+        # Check if it's a valid backup file
+        valid_extensions = ['.db', '.json']
+        if not any(attachment.filename.endswith(ext) for ext in valid_extensions):
+            failed_files.append(f"{attachment.filename} (invalid file type)")
+            continue
+        
+        try:
+            # Download the file
+            file_data = await attachment.read()
+            
+            # Save to current directory
+            with open(attachment.filename, 'wb') as f:
+                f.write(file_data)
+            
+            restored_files.append(attachment.filename)
+            
+        except Exception as e:
+            failed_files.append(f"{attachment.filename} ({str(e)})")
+    
+    # Create result embed
+    embed = discord.Embed(
+        title="🔄 Restore Results",
+        color=0x10B981 if restored_files else 0xDC2626,
+        timestamp=datetime.now()
+    )
+    
+    if restored_files:
+        embed.add_field(name="✅ Restored", value="\n".join([f"• {f}" for f in restored_files]), inline=False)
+    
+    if failed_files:
+        embed.add_field(name="❌ Failed", value="\n".join(failed_files), inline=False)
+    
+    if restored_files:
+        embed.add_field(name="⚠️ Important", value="Restart the bot for changes to take full effect!", inline=False)
+    
+    embed.set_footer(text="Ω Lite | Restore Complete")
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 # ========== HELP COMMAND ==========
 
 @bot.tree.command(name="help", description="Get help with commands")
@@ -1750,20 +1728,49 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite | Made for FC Mobile")
     await interaction.response.send_message(embed=embed)
 
+# ========== FLASK KEEP-ALIVE SERVER (MOVED TO BOTTOM) ==========
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    try:
+        # Check if bot is ready before accessing attributes
+        if bot.is_ready():
+            latency = round(bot.latency * 1000)
+            servers = len(bot.guilds)
+            return f"⚡ Ω Lite is running! Servers: {servers} | Latency: {latency}ms"
+        else:
+            return "⚡ Ω Lite is starting up... Please wait a moment."
+    except Exception as e:
+        return f"⚡ Ω Lite Status: Bot starting or encountered issue"
+
+def run():
+    # Use Render's provided PORT environment variable, fallback to 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.daemon = True  # Ensures thread closes cleanly when bot stops
+    t.start()
+
 # ========== START BOT ==========
 
 if __name__ == "__main__":
     # Start Flask server for Render
     keep_alive()
     
-    # Get bot token
+    # Get bot token from environment variable
     token = os.getenv('BOT_TOKEN')
     if not token:
-        print("❌ ERROR: BOT_TOKEN not set!")
+        print("❌ ERROR: BOT_TOKEN environment variable not set!")
+        print("Please set your Discord bot token in Render environment variables.")
         sys.exit(1)
     
-    print("🚀 Starting bot...")
-    print("🌐 Starting Ω Lite on Render...")
+    print("=" * 50)
+    print("🚀 Starting Ω Lite Bot...")
+    print("🌐 Flask keep-alive server will run on Render")
     print("🏆 Top 10 Players system: ACTIVE")
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
@@ -1771,6 +1778,7 @@ if __name__ == "__main__":
     print("🛡️ SquadHelp system: ACTIVE (15-min cooldown)")
     print("⚔️ DRHelp system: ACTIVE (5-min cooldown)")
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
+    print("=" * 50)
     
     # Handle graceful shutdown
     def signal_handler(sig, frame):
@@ -1784,6 +1792,9 @@ if __name__ == "__main__":
     # Run the bot with auto-reconnect
     try:
         bot.run(token, reconnect=True)
+    except discord.LoginFailure:
+        print("❌ Invalid bot token! Please check your BOT_TOKEN environment variable.")
+        sys.exit(1)
     except Exception as e:
         print(f"❌ Bot crashed: {e}")
         sys.exit(1)
