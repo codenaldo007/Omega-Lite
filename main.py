@@ -72,86 +72,11 @@ def init_lfm_db():
     conn.commit()
     conn.close()
 
-# Initialize Top 10 Players database
-def init_top10_db():
-    conn = sqlite3.connect('top10.db')
-    c = conn.cursor()
-    
-    # Create table for each position
-    positions = ['GK', 'LB', 'RB', 'CB', 'CM', 'CDM', 'CAM', 'LM', 'RM', 'LW', 'RW', 'ST']
-    
-    for position in positions:
-        c.execute(f'''CREATE TABLE IF NOT EXISTS top10_{position}
-                     (rank INTEGER PRIMARY KEY,
-                      player_name TEXT,
-                      card_name TEXT,
-                      rating INTEGER,
-                      special TEXT,
-                      updated_by TEXT,
-                      updated_at TIMESTAMP)''')
-        
-        # Check if table is empty, insert default placeholders
-        c.execute(f"SELECT COUNT(*) FROM top10_{position}")
-        count = c.fetchone()[0]
-        
-        if count == 0:
-            for i in range(1, 11):
-                c.execute(f"INSERT INTO top10_{position} (rank, player_name, card_name, rating, special, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (i, f"Player {i}", f"Card {i}", 90 - i, "Base", "system", datetime.now().isoformat()))
-    
-    conn.commit()
-    conn.close()
-
 # Call these when bot starts
 print("📁 Initializing databases...")
 init_announcements_db()
 init_lfm_db()
-init_top10_db()
 print("✅ Databases initialized")
-
-# Top 10 Functions
-def get_top10(position):
-    """Get top 10 players for a position"""
-    conn = sqlite3.connect('top10.db')
-    c = conn.cursor()
-    c.execute(f"SELECT rank, player_name, card_name, rating, special, updated_by, updated_at FROM top10_{position} ORDER BY rank")
-    results = c.fetchall()
-    conn.close()
-    return results
-
-def update_top10_entry(position, rank, player_name, card_name, rating, special, updated_by):
-    """Update a top 10 entry"""
-    conn = sqlite3.connect('top10.db')
-    c = conn.cursor()
-    c.execute(f"UPDATE top10_{position} SET player_name = ?, card_name = ?, rating = ?, special = ?, updated_by = ?, updated_at = ? WHERE rank = ?",
-              (player_name, card_name, rating, special, updated_by, datetime.now().isoformat(), rank))
-    conn.commit()
-    conn.close()
-    return True
-
-def swap_top10_entries(position, rank1, rank2):
-    """Swap two entries in top 10"""
-    conn = sqlite3.connect('top10.db')
-    c = conn.cursor()
-    
-    # Get both entries
-    c.execute(f"SELECT player_name, card_name, rating, special, updated_by, updated_at FROM top10_{position} WHERE rank = ?", (rank1,))
-    entry1 = c.fetchone()
-    c.execute(f"SELECT player_name, card_name, rating, special, updated_by, updated_at FROM top10_{position} WHERE rank = ?", (rank2,))
-    entry2 = c.fetchone()
-    
-    if entry1 and entry2:
-        # Update them swapped
-        c.execute(f"UPDATE top10_{position} SET player_name = ?, card_name = ?, rating = ?, special = ?, updated_by = ?, updated_at = ? WHERE rank = ?",
-                  (entry2[0], entry2[1], entry2[2], entry2[3], "system", datetime.now().isoformat(), rank1))
-        c.execute(f"UPDATE top10_{position} SET player_name = ?, card_name = ?, rating = ?, special = ?, updated_by = ?, updated_at = ? WHERE rank = ?",
-                  (entry1[0], entry1[1], entry1[2], entry1[3], "system", datetime.now().isoformat(), rank2))
-        conn.commit()
-        conn.close()
-        return True
-    
-    conn.close()
-    return False
 
 # LFM Global Cooldown functions (5 minutes)
 def check_lfm_global_cooldown():
@@ -372,14 +297,6 @@ def can_manage_redeem_codes(user_id):
     ]
     return user_id in authorized_users
 
-# Check if user has permission to edit top 10
-def can_edit_top10(user_id):
-    authorized_users = [
-        1214456066687893506,
-        553418145063239684
-    ]
-    return user_id in authorized_users
-
 # Common timezone abbreviations mapping
 TIMEZONE_MAPPING = {
     "EST": "America/New_York",
@@ -492,7 +409,6 @@ async def on_ready():
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🛡️ SquadHelp system: Active (15-min GLOBAL cooldown)')
     print(f'⚔️ DRHelp system: Active (5-min GLOBAL cooldown)')
-    print(f'🏆 Top 10 Players system: Active')
     print(f'💾 Backup/Restore system: Active')
     print(f'🔄 Self-ping system: Active (every 14 minutes)')
     
@@ -730,184 +646,6 @@ async def cancel_announcement_command(interaction: discord.Interaction, announce
         await interaction.response.send_message(f"✅ Announcement `{announcement_id}` cancelled!", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Announcement `{announcement_id}` not found or doesn't belong to you!", ephemeral=True)
-
-# ========== TOP 10 COMMANDS ==========
-
-@bot.tree.command(name="top10", description="View the top 10 players for any position")
-@app_commands.describe(
-    position="Select the position to view"
-)
-@app_commands.choices(position=[
-    app_commands.Choice(name="GK - Goalkeeper", value="GK"),
-    app_commands.Choice(name="LB - Left Back", value="LB"),
-    app_commands.Choice(name="RB - Right Back", value="RB"),
-    app_commands.Choice(name="CB - Center Back", value="CB"),
-    app_commands.Choice(name="CM - Center Midfielder", value="CM"),
-    app_commands.Choice(name="CDM - Defensive Midfielder", value="CDM"),
-    app_commands.Choice(name="CAM - Attacking Midfielder", value="CAM"),
-    app_commands.Choice(name="LM - Left Midfielder", value="LM"),
-    app_commands.Choice(name="RM - Right Midfielder", value="RM"),
-    app_commands.Choice(name="LW - Left Winger", value="LW"),
-    app_commands.Choice(name="RW - Right Winger", value="RW"),
-    app_commands.Choice(name="ST - Striker", value="ST")
-])
-async def top10_view(interaction: discord.Interaction, position: str):
-    """View the top 10 players for a specific position"""
-    await interaction.response.defer()
-    
-    try:
-        top10_data = get_top10(position)
-        
-        # Position full names for display
-        position_names = {
-            "GK": "Goalkeeper", "LB": "Left Back", "RB": "Right Back", "CB": "Center Back",
-            "CM": "Center Midfielder", "CDM": "Defensive Midfielder", "CAM": "Attacking Midfielder",
-            "LM": "Left Midfielder", "RM": "Right Midfielder", "LW": "Left Winger",
-            "RW": "Right Winger", "ST": "Striker"
-        }
-        
-        embed = discord.Embed(
-            title=f"🏆 Top 10 {position_names.get(position, position)}",
-            description=f"The best players for **{position}** position in FC Mobile",
-            color=0xF5A623
-        )
-        
-        # Build the list
-        list_text = ""
-        for rank, player_name, card_name, rating, special, updated_by, updated_at in top10_data:
-            medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"{rank}."
-            list_text += f"{medal} **{player_name}** - {card_name}\n"
-            list_text += f"   ⭐ **{rating}** OVR | {special}\n\n"
-        
-        embed.add_field(name="Rankings", value=list_text, inline=False)
-        
-        # Add update info
-        last_updated = datetime.fromisoformat(top10_data[0][6]) if top10_data else datetime.now()
-        embed.set_footer(text=f"Last updated: {last_updated.strftime('%Y-%m-%d %H:%M UTC')} | Ω Lite")
-        
-        await interaction.followup.send(embed=embed)
-        
-    except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
-
-@bot.tree.command(name="top10_edit", description="Edit the top 10 list for a position (Authorized only)")
-@app_commands.describe(
-    position="Select the position to edit",
-    rank="Rank number (1-10)",
-    player_name="Player name",
-    card_name="Card name (e.g., TOTY, UCL, etc.)",
-    rating="Player rating",
-    special="Special card type (e.g., TOTY, Icon, etc.)"
-)
-@app_commands.choices(position=[
-    app_commands.Choice(name="GK - Goalkeeper", value="GK"),
-    app_commands.Choice(name="LB - Left Back", value="LB"),
-    app_commands.Choice(name="RB - Right Back", value="RB"),
-    app_commands.Choice(name="CB - Center Back", value="CB"),
-    app_commands.Choice(name="CM - Center Midfielder", value="CM"),
-    app_commands.Choice(name="CDM - Defensive Midfielder", value="CDM"),
-    app_commands.Choice(name="CAM - Attacking Midfielder", value="CAM"),
-    app_commands.Choice(name="LM - Left Midfielder", value="LM"),
-    app_commands.Choice(name="RM - Right Midfielder", value="RM"),
-    app_commands.Choice(name="LW - Left Winger", value="LW"),
-    app_commands.Choice(name="RW - Right Winger", value="RW"),
-    app_commands.Choice(name="ST - Striker", value="ST")
-])
-async def top10_edit(
-    interaction: discord.Interaction, 
-    position: str, 
-    rank: int, 
-    player_name: str, 
-    card_name: str, 
-    rating: int, 
-    special: str
-):
-    """Edit a specific rank in the top 10 list (Authorized only)"""
-    
-    # Check authorization
-    if not can_edit_top10(interaction.user.id):
-        await interaction.response.send_message("❌ This command is for authorized users only!", ephemeral=True)
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        if rank < 1 or rank > 10:
-            await interaction.followup.send("❌ Rank must be between 1 and 10!", ephemeral=True)
-            return
-        
-        # Update the entry
-        update_top10_entry(position, rank, player_name, card_name, rating, special, interaction.user.name)
-        
-        embed = discord.Embed(
-            title="✅ Top 10 Updated!",
-            description=f"Successfully updated **{position}** position at rank **{rank}**",
-            color=0x10B981
-        )
-        embed.add_field(name="Player", value=player_name, inline=True)
-        embed.add_field(name="Card", value=card_name, inline=True)
-        embed.add_field(name="Rating", value=f"{rating} OVR", inline=True)
-        embed.add_field(name="Special", value=special, inline=True)
-        embed.set_footer(text=f"Updated by {interaction.user.name}")
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        
-    except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
-
-@bot.tree.command(name="top10_swap", description="Swap two ranks in the top 10 list (Authorized only)")
-@app_commands.describe(
-    position="Select the position",
-    rank1="First rank to swap",
-    rank2="Second rank to swap"
-)
-@app_commands.choices(position=[
-    app_commands.Choice(name="GK - Goalkeeper", value="GK"),
-    app_commands.Choice(name="LB - Left Back", value="LB"),
-    app_commands.Choice(name="RB - Right Back", value="RB"),
-    app_commands.Choice(name="CB - Center Back", value="CB"),
-    app_commands.Choice(name="CM - Center Midfielder", value="CM"),
-    app_commands.Choice(name="CDM - Defensive Midfielder", value="CDM"),
-    app_commands.Choice(name="CAM - Attacking Midfielder", value="CAM"),
-    app_commands.Choice(name="LM - Left Midfielder", value="LM"),
-    app_commands.Choice(name="RM - Right Midfielder", value="RM"),
-    app_commands.Choice(name="LW - Left Winger", value="LW"),
-    app_commands.Choice(name="RW - Right Winger", value="RW"),
-    app_commands.Choice(name="ST - Striker", value="ST")
-])
-async def top10_swap(interaction: discord.Interaction, position: str, rank1: int, rank2: int):
-    """Swap two ranks in the top 10 list (Authorized only)"""
-    
-    if not can_edit_top10(interaction.user.id):
-        await interaction.response.send_message("❌ This command is for authorized users only!", ephemeral=True)
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        if rank1 < 1 or rank1 > 10 or rank2 < 1 or rank2 > 10:
-            await interaction.followup.send("❌ Ranks must be between 1 and 10!", ephemeral=True)
-            return
-        
-        if rank1 == rank2:
-            await interaction.followup.send("❌ Cannot swap the same rank!", ephemeral=True)
-            return
-        
-        success = swap_top10_entries(position, rank1, rank2)
-        
-        if success:
-            embed = discord.Embed(
-                title="✅ Top 10 Swapped!",
-                description=f"Successfully swapped rank **{rank1}** and rank **{rank2}** in **{position}** position",
-                color=0x10B981
-            )
-            embed.set_footer(text=f"Updated by {interaction.user.name}")
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await interaction.followup.send("❌ Failed to swap entries!", ephemeral=True)
-            
-    except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== LFM COMMAND ==========
 
@@ -1577,7 +1315,7 @@ async def backup_command(interaction: discord.Interaction):
     
     await interaction.response.defer()
     
-    files_to_backup = ['top10.db', 'announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json']
+    files_to_backup = ['announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json']
     backup_files = []
     
     for file in files_to_backup:
@@ -1673,7 +1411,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🎮 **Game Tools**",
-        value="`/ovr` - Calculate team OVR\n`/invest` - Investment calculator\n`/formations` - Best formations\n`/top10` - View top players",
+        value="`/ovr` - Calculate team OVR\n`/invest` - Investment calculator\n`/formations` - Best formations",
         inline=False
     )
     
@@ -1702,12 +1440,6 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
-        name="🏆 **Top 10 Management**",
-        value="`/top10_edit` - Edit entry\n`/top10_swap` - Swap ranks",
-        inline=False
-    )
-    
-    embed.add_field(
         name="💾 **Backup & Restore**",
         value="`/backup` - Download all database files\n`/restore` - Upload files to restore data",
         inline=False
@@ -1728,7 +1460,7 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite | Made for FC Mobile")
     await interaction.response.send_message(embed=embed)
 
-# ========== FLASK KEEP-ALIVE SERVER (MOVED TO BOTTOM) ==========
+# ========== FLASK KEEP-ALIVE SERVER ==========
 
 app = Flask('')
 
@@ -1771,7 +1503,6 @@ if __name__ == "__main__":
     print("=" * 50)
     print("🚀 Starting Ω Lite Bot...")
     print("🌐 Flask keep-alive server will run on Render")
-    print("🏆 Top 10 Players system: ACTIVE")
     print("📢 Announcement system: Using Unix timestamps")
     print("💾 Backup/Restore system: ACTIVE")
     print("🎮 LFM system: ACTIVE (5-min cooldown)")
