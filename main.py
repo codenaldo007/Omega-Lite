@@ -969,6 +969,7 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
     await interaction.response.defer()
     
     try:
+        # Parse the input strings into lists
         base_list = [int(x.strip()) for x in base_ovr_values.split('+')]
         rank_list = [int(x.strip()) for x in rankup_values.split('+')]
         
@@ -977,9 +978,10 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
             return
         
         if len(base_list) != count or len(rank_list) != count:
-            await interaction.followup.send(f"❌ Expected {count} values each!", ephemeral=True)
+            await interaction.followup.send(f"❌ Expected {count} values each! Got {len(base_list)} base and {len(rank_list)} rankup values.", ephemeral=True)
             return
         
+        # Keep original calculation logic
         base_total = sum(base_list)
         rank_total = sum(rank_list)
         
@@ -1012,8 +1014,11 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
         embed.set_footer(text="Ω Lite | Use + between values")
         await interaction.followup.send(embed=embed)
         
+    except ValueError:
+        await interaction.followup.send("❌ Please enter valid numbers separated by +", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+        print(f"OVR command error: {e}")  # This will show in your bot console
+        await interaction.followup.send(f"❌ Error calculating OVR. Please check your input format.", ephemeral=True)
 
 # Investment Calculator
 @bot.tree.command(name="invest", description="Calculate investment profit/loss with 10% tax")
