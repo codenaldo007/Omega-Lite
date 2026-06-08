@@ -101,7 +101,6 @@ print("✅ Databases initialized")
 
 # ========== COOLDOWN FUNCTIONS ==========
 
-# LFM Global Cooldown functions (5 minutes)
 def check_lfm_global_cooldown():
     """Check if LFM is on global cooldown"""
     try:
@@ -115,7 +114,7 @@ def check_lfm_global_cooldown():
                 last_user_id = result[1]
                 last_user_name = result[2]
                 time_passed = datetime.now() - last_used
-                if time_passed.total_seconds() < 300:  # 5 minutes
+                if time_passed.total_seconds() < 300:
                     remaining = 300 - time_passed.total_seconds()
                     return True, remaining, last_user_id, last_user_name
         return False, 0, None, None
@@ -135,7 +134,6 @@ def update_lfm_global_cooldown(user_id, user_name):
     except Exception as e:
         print(f"⚠️ Error updating LFM cooldown: {e}")
 
-# SquadHelp Global Cooldown functions (15 minutes)
 def check_squadhelp_global_cooldown():
     """Check if SquadHelp is on global cooldown"""
     try:
@@ -149,7 +147,7 @@ def check_squadhelp_global_cooldown():
                 last_user_id = result[1]
                 last_user_name = result[2]
                 time_passed = datetime.now() - last_used
-                if time_passed.total_seconds() < 900:  # 15 minutes
+                if time_passed.total_seconds() < 900:
                     remaining = 900 - time_passed.total_seconds()
                     return True, remaining, last_user_id, last_user_name
         return False, 0, None, None
@@ -169,7 +167,6 @@ def update_squadhelp_global_cooldown(user_id, user_name):
     except Exception as e:
         print(f"⚠️ Error updating SquadHelp cooldown: {e}")
 
-# DRHelp Global Cooldown functions (5 minutes)
 def check_drhelp_global_cooldown():
     """Check if DRHelp is on global cooldown"""
     try:
@@ -183,7 +180,7 @@ def check_drhelp_global_cooldown():
                 last_user_id = result[1]
                 last_user_name = result[2]
                 time_passed = datetime.now() - last_used
-                if time_passed.total_seconds() < 300:  # 5 minutes
+                if time_passed.total_seconds() < 300:
                     remaining = 300 - time_passed.total_seconds()
                     return True, remaining, last_user_id, last_user_name
         return False, 0, None, None
@@ -209,17 +206,14 @@ def parse_timestamp(timestamp_str):
     """Parse timestamp from various formats (Unix timestamp or Discord timestamp)"""
     timestamp_str = timestamp_str.strip()
     
-    # Check if it's a Discord timestamp format like <t:1734567890>
     discord_match = re.match(r'<t:(\d+)>', timestamp_str)
     if discord_match:
         return int(discord_match.group(1))
     
-    # Check if it's a pure Unix timestamp
     try:
         ts = int(timestamp_str)
-        # Check if it's a valid timestamp (10 digits for seconds, 13 for milliseconds)
         if len(str(ts)) == 13:
-            ts = ts // 1000  # Convert milliseconds to seconds
+            ts = ts // 1000
         return ts
     except ValueError:
         pass
@@ -338,51 +332,26 @@ def can_manage_redeem_codes(user_id):
 # ========== TIMEZONE MAPPING ==========
 
 TIMEZONE_MAPPING = {
-    "EST": "America/New_York",
-    "EDT": "America/New_York",
-    "CST": "America/Chicago",
-    "CDT": "America/Chicago",
-    "MST": "America/Denver",
-    "MDT": "America/Denver",
-    "PST": "America/Los_Angeles",
-    "PDT": "America/Los_Angeles",
-    "AKST": "America/Anchorage",
-    "AKDT": "America/Anchorage",
-    "HST": "Pacific/Honolulu",
-    "HAST": "Pacific/Honolulu",
-    "GMT": "Europe/London",
-    "BST": "Europe/London",
-    "UTC": "UTC",
-    "CET": "Europe/Paris",
-    "CEST": "Europe/Paris",
-    "EET": "Europe/Helsinki",
-    "EEST": "Europe/Helsinki",
-    "WET": "Europe/Lisbon",
-    "WEST": "Europe/Lisbon",
-    "IST": "Asia/Kolkata",
-    "JST": "Asia/Tokyo",
-    "KST": "Asia/Seoul",
-    "CST_CHINA": "Asia/Shanghai",
-    "HKT": "Asia/Hong_Kong",
-    "SGT": "Asia/Singapore",
-    "PHT": "Asia/Manila",
-    "WIB": "Asia/Jakarta",
-    "WITA": "Asia/Makassar",
-    "WIT": "Asia/Jayapura",
-    "PKT": "Asia/Karachi",
-    "BDT": "Asia/Dhaka",
-    "MMT": "Asia/Yangon",
-    "AEST": "Australia/Sydney",
-    "AEDT": "Australia/Sydney",
-    "ACST": "Australia/Adelaide",
-    "ACDT": "Australia/Adelaide",
-    "AWST": "Australia/Perth",
-    "NZST": "Pacific/Auckland",
-    "NZDT": "Pacific/Auckland",
-    "SAST": "Africa/Johannesburg",
-    "EAT": "Africa/Nairobi",
-    "MSK": "Europe/Moscow",
-    "GST": "Asia/Dubai",
+    "EST": "America/New_York", "EDT": "America/New_York",
+    "CST": "America/Chicago", "CDT": "America/Chicago",
+    "MST": "America/Denver", "MDT": "America/Denver",
+    "PST": "America/Los_Angeles", "PDT": "America/Los_Angeles",
+    "AKST": "America/Anchorage", "AKDT": "America/Anchorage",
+    "HST": "Pacific/Honolulu", "HAST": "Pacific/Honolulu",
+    "GMT": "Europe/London", "BST": "Europe/London",
+    "UTC": "UTC", "CET": "Europe/Paris", "CEST": "Europe/Paris",
+    "EET": "Europe/Helsinki", "EEST": "Europe/Helsinki",
+    "WET": "Europe/Lisbon", "WEST": "Europe/Lisbon",
+    "IST": "Asia/Kolkata", "JST": "Asia/Tokyo", "KST": "Asia/Seoul",
+    "CST_CHINA": "Asia/Shanghai", "HKT": "Asia/Hong_Kong",
+    "SGT": "Asia/Singapore", "PHT": "Asia/Manila",
+    "WIB": "Asia/Jakarta", "WITA": "Asia/Makassar", "WIT": "Asia/Jayapura",
+    "PKT": "Asia/Karachi", "BDT": "Asia/Dhaka", "MMT": "Asia/Yangon",
+    "AEST": "Australia/Sydney", "AEDT": "Australia/Sydney",
+    "ACST": "Australia/Adelaide", "ACDT": "Australia/Adelaide",
+    "AWST": "Australia/Perth", "NZST": "Pacific/Auckland", "NZDT": "Pacific/Auckland",
+    "SAST": "Africa/Johannesburg", "EAT": "Africa/Nairobi",
+    "MSK": "Europe/Moscow", "GST": "Asia/Dubai",
 }
 
 def get_timezone_from_abbreviation(abbr):
@@ -411,10 +380,10 @@ class BotHealthChecker:
     def check_health(self):
         uptime = datetime.now() - self.start_time
         return {
-            "uptime": str(uptime).split('.')[0],  # Remove microseconds
+            "uptime": str(uptime).split('.')[0],
             "commands": self.command_count,
             "errors": self.error_count,
-            "last_error": str(self.last_error)[:100] if self.last_error else "None"
+            "last_error": str(self.last_error)[:200] if self.last_error else "None"
         }
 
 health_checker = BotHealthChecker()
@@ -433,27 +402,36 @@ class FCOHomiesBot(commands.Bot):
         self.lfm_role_id = 1391787410182111456
         self.squadhelp_role_id = 1391671605826031626
         self.drhelp_role_id = 1446014580081037314
+        self.synced = False  # Track if commands have been synced
 
     async def setup_hook(self):
-        print("🔄 Waiting 5 seconds before syncing commands to avoid rate limits...")
-        await asyncio.sleep(5)
-        print("🔄 Syncing slash commands...")
+        # DO NOT sync commands here - this causes rate limits
+        # Commands will be synced manually or on first startup only
+        print("🔄 Bot setup complete - commands will use existing sync")
+        
+        # Only sync if this is first time (no commands exist)
         try:
-            synced = await self.tree.sync()
-            print(f"✅ Slash commands synced globally! {len(synced)} commands loaded.")
-        except discord.errors.HTTPException as e:
-            if e.status == 429:
-                print("⚠️ Rate limited while syncing commands. Will retry later.")
-                await asyncio.sleep(10)
+            await asyncio.sleep(2)
+            existing_commands = await self.tree.fetch_commands()
+            if not existing_commands:
+                print("🔄 No commands found - performing initial sync...")
                 try:
                     synced = await self.tree.sync()
-                    print(f"✅ Slash commands synced on retry! {len(synced)} commands loaded.")
-                except Exception as retry_error:
-                    print(f"❌ Still rate limited: {retry_error}")
+                    print(f"✅ Initial sync complete! {len(synced)} commands loaded.")
+                    self.synced = True
+                except Exception as e:
+                    if "429" in str(e):
+                        print("⚠️ Rate limited during initial sync - will try later")
+                    else:
+                        print(f"❌ Initial sync error: {e}")
             else:
-                print(f"❌ Error syncing commands: {e}")
+                print(f"✅ {len(existing_commands)} commands already registered - skipping sync")
+                self.synced = True
         except Exception as e:
-            print(f"❌ Error syncing commands: {e}")
+            if "429" in str(e):
+                print("⚠️ Rate limited checking commands - skipping sync")
+            else:
+                print(f"⚠️ Could not check commands: {e}")
 
 bot = FCOHomiesBot()
 
@@ -465,7 +443,6 @@ async def on_ready():
     print(f'📊 Connected to {len(bot.guilds)} servers')
     print(f'🔧 User: {bot.user}')
     print(f'🆔 ID: {bot.user.id}')
-    print(f'🔄 Slash commands: Active')
     print(f'📢 Announcement system: Active')
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🛡️ SquadHelp system: Active (15-min GLOBAL cooldown)')
@@ -486,24 +463,20 @@ async def on_ready():
         print(f"📝 Global commands registered: {len(commands)}")
         for cmd in commands:
             print(f"  - /{cmd.name}")
-    except discord.errors.HTTPException as e:
-        if e.status == 429:
-            print("⚠️ Rate limited while fetching commands. Will try later.")
+    except Exception as e:
+        if "429" in str(e):
+            print("⚠️ Rate limited fetching commands - will skip display")
         else:
             print(f"⚠️ Could not fetch commands: {e}")
-    except Exception as e:
-        print(f"⚠️ Could not fetch commands: {e}")
     
-    await bot.change_presence(activity=discord.Activity(
-        type=discord.ActivityType.playing, 
-        name="Ω Lite | /help"
-    ))
-
-@bot.event
-async def on_command_error(interaction: discord.Interaction, error):
-    health_checker.error_count += 1
-    health_checker.last_error = error
-    print(f"❌ Command error from {interaction.user}: {error}")
+    # Set presence with retry logic
+    try:
+        await bot.change_presence(activity=discord.Activity(
+            type=discord.ActivityType.playing, 
+            name="Ω Lite | /help"
+        ))
+    except Exception as e:
+        print(f"⚠️ Could not set presence: {e}")
 
 # ========== BACKGROUND TASKS ==========
 
@@ -513,6 +486,9 @@ async def self_ping():
     
     RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
     consecutive_failures = 0
+    
+    # Wait before first ping to avoid startup API spam
+    await asyncio.sleep(60)
     
     while not bot.is_closed():
         try:
@@ -532,7 +508,6 @@ async def self_ping():
             print(f"⚠️ External ping failed: {e}")
             consecutive_failures += 1
         
-        # If too many failures, try to recover
         if consecutive_failures > 5:
             print("🔄 Too many ping failures, attempting recovery...")
             consecutive_failures = 0
@@ -547,9 +522,7 @@ async def memory_cleanup():
     while not bot.is_closed():
         await asyncio.sleep(3600)  # Run every hour
         try:
-            before = gc.get_count()
             gc.collect()
-            after = gc.get_count()
             print(f"🧹 Memory cleanup performed at {datetime.now().strftime('%H:%M:%S')}")
         except Exception as e:
             print(f"⚠️ Memory cleanup error: {e}")
@@ -618,7 +591,6 @@ async def schedule_announcement(
     role: discord.Role, 
     timestamp: str
 ):
-    """Schedule an announcement using a timestamp"""
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
@@ -692,7 +664,7 @@ async def schedule_announcement(
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="announce_list", description="View all your scheduled announcements")
@@ -791,7 +763,7 @@ async def lfm_command(interaction: discord.Interaction):
             value="Ping the player who used this command!",
             inline=False
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | LFM System (5-min global cooldown)")
         
         await interaction.channel.send(content=f"{lfm_role.mention}", embed=embed)
@@ -816,7 +788,7 @@ async def lfm_command(interaction: discord.Interaction):
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="lfm_status", description="Check LFM global cooldown status")
@@ -898,7 +870,7 @@ async def squadhelp_command(interaction: discord.Interaction):
             value="Ping the player who used this command and offer your advice!",
             inline=False
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | SquadHelp System (15-min global cooldown)")
         
         await interaction.channel.send(content=f"{squadhelp_role.mention}", embed=embed)
@@ -923,7 +895,7 @@ async def squadhelp_command(interaction: discord.Interaction):
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="squadhelp_status", description="Check SquadHelp global cooldown status")
@@ -1005,7 +977,7 @@ async def drhelp_command(interaction: discord.Interaction):
             value="Ping the player who used this command and offer your advice!",
             inline=False
         )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | DRHelp System (5-min global cooldown)")
         
         await interaction.channel.send(content=f"{drhelp_role.mention}", embed=embed)
@@ -1030,7 +1002,7 @@ async def drhelp_command(interaction: discord.Interaction):
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="drhelp_status", description="Check DRHelp global cooldown status")
@@ -1126,8 +1098,7 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
         await interaction.followup.send("❌ Please enter valid numbers separated by +", ephemeral=True)
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
-        print(f"OVR command error: {e}")
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error calculating OVR. Please check your input format.", ephemeral=True)
 
 # ========== INVEST COMMAND ==========
@@ -1178,7 +1149,7 @@ async def invest_calc(interaction: discord.Interaction, buy_price: float, buy_qu
             
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== TIMEZONE COMMANDS ==========
@@ -1223,7 +1194,7 @@ async def timezone_convert(interaction: discord.Interaction, utc_time: str, time
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="datetotimestamp", description="Convert date and time to Unix timestamp")
@@ -1269,7 +1240,7 @@ async def date_to_timestamp(interaction: discord.Interaction, date: str, time: s
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== FORMATIONS COMMAND ==========
@@ -1308,7 +1279,7 @@ async def formations_command(interaction: discord.Interaction, game_mode: str):
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== REDEEM CODE COMMANDS ==========
@@ -1338,7 +1309,7 @@ async def redeem_codes(interaction: discord.Interaction):
         
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="redeem_add", description="Add redeem code (Authorized only)")
@@ -1374,7 +1345,7 @@ async def redeem_add(interaction: discord.Interaction, code: str, reward: str, a
             
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="redeem_remove", description="Remove redeem code (Authorized only)")
@@ -1403,7 +1374,7 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
             
     except Exception as e:
         health_checker.error_count += 1
-        health_checker.last_error = e
+        health_checker.last_error = str(e)[:200]
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== UTILITY COMMANDS ==========
@@ -1437,7 +1408,6 @@ async def health_check_command(interaction: discord.Interaction):
     embed.add_field(name="💾 Last Error", value=health["last_error"], inline=False)
     embed.add_field(name="🔄 Servers", value=len(bot.guilds), inline=True)
     
-    # Check database health
     try:
         with db_connection('lfm.db') as conn:
             conn.cursor().execute("SELECT 1")
@@ -1448,18 +1418,20 @@ async def health_check_command(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite | Health Monitor")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="sync", description="Sync commands (Owner only)")
+@bot.tree.command(name="sync", description="Sync commands (Owner only - use sparingly!)")
 async def sync_commands(interaction: discord.Interaction):
     if interaction.user.id != 1214456066687893506:
         await interaction.response.send_message("❌ Owner only!", ephemeral=True)
         return
     
+    await interaction.response.defer(ephemeral=True)
+    
     try:
-        await interaction.response.send_message("🔄 Syncing...", ephemeral=True)
         synced = await bot.tree.sync()
-        await interaction.edit_original_response(content=f"✅ Synced {len(synced)} commands!")
+        bot.synced = True
+        await interaction.followup.send(f"✅ Synced {len(synced)} commands! Use this command sparingly to avoid rate limits.", ephemeral=True)
     except Exception as e:
-        await interaction.edit_original_response(content=f"❌ Failed: {e}")
+        await interaction.followup.send(f"❌ Failed: {e}\nWait a few minutes and try again.", ephemeral=True)
 
 @bot.tree.command(name="timezones", description="Show available timezone abbreviations")
 async def timezone_help(interaction: discord.Interaction):
@@ -1674,6 +1646,7 @@ if __name__ == "__main__":
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     print("🧹 Memory cleanup: ACTIVE (every hour)")
     print("🏥 Health monitoring: ACTIVE")
+    print("⚠️  Commands synced ONLY on first run - use /sync manually if needed")
     print("=" * 50)
     
     # Handle graceful shutdown
