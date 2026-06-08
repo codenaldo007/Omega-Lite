@@ -100,8 +100,12 @@ init_lfm_db()
 print("✅ Databases initialized")
 
 # ========== SNIPE STORAGE ==========
-deleted_messages = {}
-edited_messages = {}
+# Store up to 50 deleted messages per channel
+deleted_messages = {}  # {channel_id: [msg1, msg2, msg3, ...]}
+edited_messages = {}   # {channel_id: [msg1, msg2, msg3, ...]}
+
+# Users that won't be sniped (add your user ID here)
+SNIPE_IGNORE_USERS = [1214456066687893506]  # Your user ID - bot won't snipe you
 
 # ========== COOLDOWN FUNCTIONS ==========
 
@@ -372,6 +376,79 @@ def get_timezone_from_abbreviation(abbr):
         pass
     return None
 
+# ========== PAGINATION VIEW ==========
+
+class SnipePagination(discord.ui.View):
+    def __init__(self, messages, title_prefix="🗑️ Deleted Message", timeout=60):
+        super().__init__(timeout=timeout)
+        self.messages = messages
+        self.current_page = 0
+        self.title_prefix = title_prefix
+        self.update_buttons()
+    
+    def update_buttons(self):
+        self.prev_button.disabled = self.current_page == 0
+        self.next_button.disabled = self.current_page == len(self.messages) - 1
+    
+    def get_embed(self):
+        msg = self.messages[self.current_page]
+        time_diff = (datetime.now() - msg["time"]).seconds
+        
+        if time_diff < 60:
+            time_text = f"{time_diff}s ago"
+        elif time_diff < 3600:
+            time_text = f"{time_diff // 60}m ago"
+        else:
+            time_text = f"{time_diff // 3600}h ago"
+        
+        total = len(self.messages)
+        
+        if "before" in msg:  # Edit snipe
+            embed = discord.Embed(color=0xF59E0B, timestamp=msg["time"])
+            embed.set_author(name=f"✏️ {msg['author']}", icon_url=msg["author_avatar"])
+            embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
+            embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
+            embed.set_footer(text=f"Edited {time_text} • {self.current_page + 1}/{total}")
+        else:  # Delete snipe
+            embed = discord.Embed(
+                description=msg["content"][:2000],
+                color=0xDC2626,
+                timestamp=msg["time"]
+            )
+            embed.set_author(name=f"🗑️ {msg['author']}", icon_url=msg["author_avatar"])
+            embed.set_footer(text=f"Deleted {time_text} • {self.current_page + 1}/{total}")
+            
+            if msg["attachments"]:
+                attach_text = "\n".join(msg["attachments"][:3])
+                embed.add_field(name="📎 Attachments", value=attach_text[:1024], inline=False)
+                if msg["attachments"]:
+                    embed.set_image(url=msg["attachments"][0])
+        
+        return embed
+    
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.gray, custom_id="prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.get_embed(), view=self)
+        else:
+            await interaction.response.defer()
+    
+    @discord.ui.button(label="▶️ Next", style=discord.ButtonStyle.gray, custom_id="next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < len(self.messages) - 1:
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(embed=self.get_embed(), view=self)
+        else:
+            await interaction.response.defer()
+    
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        # Can't update after timeout without message reference, so we just disable
+
 # ========== HEALTH CHECK SYSTEM ==========
 
 class BotHealthChecker:
@@ -448,7 +525,7 @@ async def on_ready():
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🛡️ SquadHelp system: Active (15-min GLOBAL cooldown)')
     print(f'⚔️ DRHelp system: Active (5-min GLOBAL cooldown)')
-    print(f'🔫 Snipe system: Active')
+    print(f'🔫 Snipe system: Active (ignoring your messages 😉)')
     print(f'💾 Backup/Restore system: Active')
     print(f'🔄 Self-ping system: Active (every 14 minutes)')
     print(f'🧹 Memory cleanup: Active (every hour)')
@@ -481,11 +558,19 @@ async def on_ready():
 
 @bot.event
 async def on_message_delete(message):
-    """Store deleted messages for snipe"""
-    if message.author.bot or (not message.content and not message.attachments):
+    """Store deleted messages for snipe (ignores users in SNIPE_IGNORE_USERS)"""
+    # Don't snipe ignored users or bots
+    if message.author.bot or message.author.id in SNIPE_IGNORE_USERS:
         return
     
-    deleted_messages[message.channel.id] = {
+    # Don't store empty messages with no attachments
+    if not message.content and not message.attachments:
+        return
+    
+    if message.channel.id not in deleted_messages:
+        deleted_messages[message.channel.id] = []
+    
+    msg_data = {
         "content": message.content or "*No text*",
         "author": str(message.author),
         "author_id": message.author.id,
@@ -493,20 +578,39 @@ async def on_message_delete(message):
         "time": datetime.now(),
         "attachments": [att.url for att in message.attachments] if message.attachments else []
     }
+    
+    # Add to beginning of list (newest first)
+    deleted_messages[message.channel.id].insert(0, msg_data)
+    
+    # Keep only last 50 messages per channel
+    if len(deleted_messages[message.channel.id]) > 50:
+        deleted_messages[message.channel.id] = deleted_messages[message.channel.id][:50]
 
 @bot.event
 async def on_message_edit(before, after):
-    """Store edited messages for editsnipe"""
-    if before.author.bot or before.content == after.content:
+    """Store edited messages for editsnipe (ignores users in SNIPE_IGNORE_USERS)"""
+    # Don't snipe ignored users, bots, or same content
+    if before.author.bot or before.author.id in SNIPE_IGNORE_USERS or before.content == after.content:
         return
     
-    edited_messages[before.channel.id] = {
+    if before.channel.id not in edited_messages:
+        edited_messages[before.channel.id] = []
+    
+    msg_data = {
         "before": before.content or "*No text*",
         "after": after.content or "*No text*",
         "author": str(before.author),
+        "author_id": before.author.id,
         "author_avatar": before.author.display_avatar.url if before.author.display_avatar else None,
         "time": datetime.now()
     }
+    
+    # Add to beginning of list (newest first)
+    edited_messages[before.channel.id].insert(0, msg_data)
+    
+    # Keep only last 50 messages per channel
+    if len(edited_messages[before.channel.id]) > 50:
+        edited_messages[before.channel.id] = edited_messages[before.channel.id][:50]
 
 # ========== BACKGROUND TASKS ==========
 
@@ -552,6 +656,16 @@ async def memory_cleanup():
         await asyncio.sleep(3600)
         try:
             gc.collect()
+            # Clean up old snipe messages (older than 6 hours)
+            cutoff = datetime.now() - timedelta(hours=6)
+            for channel_id in list(deleted_messages.keys()):
+                deleted_messages[channel_id] = [m for m in deleted_messages[channel_id] if m["time"] > cutoff]
+                if not deleted_messages[channel_id]:
+                    del deleted_messages[channel_id]
+            for channel_id in list(edited_messages.keys()):
+                edited_messages[channel_id] = [m for m in edited_messages[channel_id] if m["time"] > cutoff]
+                if not edited_messages[channel_id]:
+                    del edited_messages[channel_id]
             print(f"🧹 Memory cleanup performed at {datetime.now().strftime('%H:%M:%S')}")
         except Exception as e:
             print(f"⚠️ Memory cleanup error: {e}")
@@ -1475,68 +1589,126 @@ async def timezone_help(interaction: discord.Interaction):
 
 # ========== SNIPE COMMANDS ==========
 
-@bot.tree.command(name="snipe", description="🔫 Show the last deleted message in this channel")
-async def snipe(interaction: discord.Interaction):
+@bot.tree.command(name="snipe", description="🔫 Show deleted messages in this channel (use arrows to browse history)")
+@app_commands.describe(page="Which deleted message to show (1 = latest, 2 = second latest, etc.)")
+async def snipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
     await interaction.response.defer()
     
-    if interaction.channel.id not in deleted_messages:
+    if interaction.channel.id not in deleted_messages or not deleted_messages[interaction.channel.id]:
         await interaction.followup.send("🔫 Nothing to snipe! No deleted messages in this channel.", ephemeral=True)
         return
     
-    msg = deleted_messages[interaction.channel.id]
-    time_diff = (datetime.now() - msg["time"]).seconds
+    messages = deleted_messages[interaction.channel.id]
     
-    if time_diff < 60:
-        time_text = f"{time_diff}s ago"
-    elif time_diff < 3600:
-        time_text = f"{time_diff // 60}m ago"
-    else:
-        time_text = f"{time_diff // 3600}h ago"
+    if page < 1 or page > len(messages):
+        await interaction.followup.send(f"❌ Please choose a page between 1 and {len(messages)}.", ephemeral=True)
+        return
     
-    embed = discord.Embed(
-        description=msg["content"][:2000],
-        color=0xDC2626,
-        timestamp=msg["time"]
-    )
-    embed.set_author(name=f"🗑️ {msg['author']}", icon_url=msg["author_avatar"])
-    embed.set_footer(text=f"Deleted {time_text}")
+    # If only one message, show it directly
+    if len(messages) == 1:
+        msg = messages[0]
+        time_diff = (datetime.now() - msg["time"]).seconds
+        
+        if time_diff < 60:
+            time_text = f"{time_diff}s ago"
+        elif time_diff < 3600:
+            time_text = f"{time_diff // 60}m ago"
+        else:
+            time_text = f"{time_diff // 3600}h ago"
+        
+        embed = discord.Embed(
+            description=msg["content"][:2000],
+            color=0xDC2626,
+            timestamp=msg["time"]
+        )
+        embed.set_author(name=f"🗑️ {msg['author']}", icon_url=msg["author_avatar"])
+        embed.set_footer(text=f"Deleted {time_text}")
+        
+        if msg["attachments"]:
+            attach_text = "\n".join(msg["attachments"][:3])
+            embed.add_field(name="📎 Attachments", value=attach_text[:1024], inline=False)
+            if msg["attachments"]:
+                embed.set_image(url=msg["attachments"][0])
+        
+        await interaction.followup.send(embed=embed)
+        return
     
-    if msg["attachments"]:
-        attach_text = "\n".join(msg["attachments"][:3])
-        embed.add_field(name="📎 Attachments", value=attach_text[:1024], inline=False)
-        if len(msg["attachments"]) > 1:
-            embed.set_image(url=msg["attachments"][0])
+    # Multiple messages - create pagination
+    view = SnipePagination(messages, title_prefix="🗑️ Deleted Message")
+    view.current_page = page - 1  # Convert to 0-based index
+    view.update_buttons()
     
-    await interaction.followup.send(embed=embed)
+    await interaction.followup.send(embed=view.get_embed(), view=view)
 
 
-@bot.tree.command(name="editsnipe", description="✏️ Show the last edited message in this channel")
-async def editsnipe(interaction: discord.Interaction):
+@bot.tree.command(name="editsnipe", description="✏️ Show edited messages in this channel (use arrows to browse history)")
+@app_commands.describe(page="Which edited message to show (1 = latest, 2 = second latest, etc.)")
+async def editsnipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
     await interaction.response.defer()
     
-    if interaction.channel.id not in edited_messages:
+    if interaction.channel.id not in edited_messages or not edited_messages[interaction.channel.id]:
         await interaction.followup.send("✏️ Nothing to editsnipe! No edited messages in this channel.", ephemeral=True)
         return
     
-    msg = edited_messages[interaction.channel.id]
-    time_diff = (datetime.now() - msg["time"]).seconds
+    messages = edited_messages[interaction.channel.id]
     
-    if time_diff < 60:
-        time_text = f"{time_diff}s ago"
-    elif time_diff < 3600:
-        time_text = f"{time_diff // 60}m ago"
-    else:
-        time_text = f"{time_diff // 3600}h ago"
+    if page < 1 or page > len(messages):
+        await interaction.followup.send(f"❌ Please choose a page between 1 and {len(messages)}.", ephemeral=True)
+        return
     
-    embed = discord.Embed(color=0xF59E0B, timestamp=msg["time"])
-    embed.set_author(name=f"✏️ {msg['author']}", icon_url=msg["author_avatar"])
-    embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
-    embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
-    embed.set_footer(text=f"Edited {time_text}")
+    # If only one message, show it directly
+    if len(messages) == 1:
+        msg = messages[0]
+        time_diff = (datetime.now() - msg["time"]).seconds
+        
+        if time_diff < 60:
+            time_text = f"{time_diff}s ago"
+        elif time_diff < 3600:
+            time_text = f"{time_diff // 60}m ago"
+        else:
+            time_text = f"{time_diff // 3600}h ago"
+        
+        embed = discord.Embed(color=0xF59E0B, timestamp=msg["time"])
+        embed.set_author(name=f"✏️ {msg['author']}", icon_url=msg["author_avatar"])
+        embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
+        embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
+        embed.set_footer(text=f"Edited {time_text}")
+        
+        await interaction.followup.send(embed=embed)
+        return
     
-    await interaction.followup.send(embed=embed)
+    # Multiple messages - create pagination
+    view = SnipePagination(messages, title_prefix="✏️ Edited Message")
+    view.current_page = page - 1  # Convert to 0-based index
+    view.update_buttons()
+    
+    await interaction.followup.send(embed=view.get_embed(), view=view)
+
+
+@bot.tree.command(name="snipe_list", description="📋 List all sniped messages in this channel")
+async def snipe_list(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    deleted_count = len(deleted_messages.get(interaction.channel.id, []))
+    edited_count = len(edited_messages.get(interaction.channel.id, []))
+    
+    embed = discord.Embed(
+        title="🔫 Snipe History",
+        color=0x8B5CF6
+    )
+    embed.add_field(name="🗑️ Deleted Messages", value=f"**{deleted_count}** stored", inline=True)
+    embed.add_field(name="✏️ Edited Messages", value=f"**{edited_count}** stored", inline=True)
+    embed.add_field(
+        name="💡 Usage",
+        value=f"`/snipe page:1` - View deleted (1=latest)\n`/editsnipe page:1` - View edited (1=latest)\n`/snipe_clear` - Clear history",
+        inline=False
+    )
+    embed.set_footer(text="Ω Lite | Snipe System")
+    
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="snipe_clear", description="🧹 Clear snipe history in this channel (Manage Messages permission)")
@@ -1557,7 +1729,7 @@ async def snipe_clear(interaction: discord.Interaction):
         cleared += 1
     
     if cleared:
-        await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s) for this channel!", ephemeral=True)
+        await interaction.response.send_message(f"🧹 Cleared all snipe history for this channel!", ephemeral=True)
     else:
         await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
 
@@ -1695,7 +1867,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🔫 **Snipe**",
-        value="`/snipe` - Show last deleted message\n`/editsnipe` - Show last edited message\n`/snipe_clear` - Clear snipe history",
+        value="`/snipe` - Show deleted messages (paginated)\n`/editsnipe` - Show edited messages (paginated)\n`/snipe_list` - View snipe counts\n`/snipe_clear` - Clear snipe history",
         inline=False
     )
     
@@ -1766,7 +1938,7 @@ if __name__ == "__main__":
     print("🎮 LFM system: ACTIVE (5-min cooldown)")
     print("🛡️ SquadHelp system: ACTIVE (15-min cooldown)")
     print("⚔️ DRHelp system: ACTIVE (5-min cooldown)")
-    print("🔫 Snipe system: ACTIVE")
+    print("🔫 Snipe system: ACTIVE (paginated, ignores your msgs)")
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     print("🧹 Memory cleanup: ACTIVE (every hour)")
     print("🏥 Health monitoring: ACTIVE")
