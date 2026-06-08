@@ -99,6 +99,10 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
+# ========== SNIPE STORAGE ==========
+deleted_messages = {}
+edited_messages = {}
+
 # ========== COOLDOWN FUNCTIONS ==========
 
 def check_lfm_global_cooldown():
@@ -402,14 +406,11 @@ class FCOHomiesBot(commands.Bot):
         self.lfm_role_id = 1391787410182111456
         self.squadhelp_role_id = 1391671605826031626
         self.drhelp_role_id = 1446014580081037314
-        self.synced = False  # Track if commands have been synced
+        self.synced = False
 
     async def setup_hook(self):
-        # DO NOT sync commands here - this causes rate limits
-        # Commands will be synced manually or on first startup only
         print("🔄 Bot setup complete - commands will use existing sync")
         
-        # Only sync if this is first time (no commands exist)
         try:
             await asyncio.sleep(2)
             existing_commands = await self.tree.fetch_commands()
@@ -447,16 +448,15 @@ async def on_ready():
     print(f'🎮 LFM system: Active (5-min GLOBAL cooldown)')
     print(f'🛡️ SquadHelp system: Active (15-min GLOBAL cooldown)')
     print(f'⚔️ DRHelp system: Active (5-min GLOBAL cooldown)')
+    print(f'🔫 Snipe system: Active')
     print(f'💾 Backup/Restore system: Active')
     print(f'🔄 Self-ping system: Active (every 14 minutes)')
     print(f'🧹 Memory cleanup: Active (every hour)')
     
-    # Start background tasks
     bot.loop.create_task(check_announcements())
     bot.loop.create_task(self_ping())
     bot.loop.create_task(memory_cleanup())
     
-    # Fetch commands after a delay
     await asyncio.sleep(3)
     try:
         commands = await bot.tree.fetch_commands()
@@ -469,7 +469,6 @@ async def on_ready():
         else:
             print(f"⚠️ Could not fetch commands: {e}")
     
-    # Set presence with retry logic
     try:
         await bot.change_presence(activity=discord.Activity(
             type=discord.ActivityType.playing, 
@@ -477,6 +476,37 @@ async def on_ready():
         ))
     except Exception as e:
         print(f"⚠️ Could not set presence: {e}")
+
+# ========== SNIPE EVENTS ==========
+
+@bot.event
+async def on_message_delete(message):
+    """Store deleted messages for snipe"""
+    if message.author.bot or (not message.content and not message.attachments):
+        return
+    
+    deleted_messages[message.channel.id] = {
+        "content": message.content or "*No text*",
+        "author": str(message.author),
+        "author_id": message.author.id,
+        "author_avatar": message.author.display_avatar.url if message.author.display_avatar else None,
+        "time": datetime.now(),
+        "attachments": [att.url for att in message.attachments] if message.attachments else []
+    }
+
+@bot.event
+async def on_message_edit(before, after):
+    """Store edited messages for editsnipe"""
+    if before.author.bot or before.content == after.content:
+        return
+    
+    edited_messages[before.channel.id] = {
+        "before": before.content or "*No text*",
+        "after": after.content or "*No text*",
+        "author": str(before.author),
+        "author_avatar": before.author.display_avatar.url if before.author.display_avatar else None,
+        "time": datetime.now()
+    }
 
 # ========== BACKGROUND TASKS ==========
 
@@ -487,7 +517,6 @@ async def self_ping():
     RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
     consecutive_failures = 0
     
-    # Wait before first ping to avoid startup API spam
     await asyncio.sleep(60)
     
     while not bot.is_closed():
@@ -513,14 +542,14 @@ async def self_ping():
             consecutive_failures = 0
             gc.collect()
         
-        await asyncio.sleep(840)  # Ping every 14 minutes
+        await asyncio.sleep(840)
 
 async def memory_cleanup():
     """Periodically clean up memory to prevent leaks"""
     await bot.wait_until_ready()
     
     while not bot.is_closed():
-        await asyncio.sleep(3600)  # Run every hour
+        await asyncio.sleep(3600)
         try:
             gc.collect()
             print(f"🧹 Memory cleanup performed at {datetime.now().strftime('%H:%M:%S')}")
@@ -1444,6 +1473,94 @@ async def timezone_help(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite")
     await interaction.response.send_message(embed=embed)
 
+# ========== SNIPE COMMANDS ==========
+
+@bot.tree.command(name="snipe", description="🔫 Show the last deleted message in this channel")
+async def snipe(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    await interaction.response.defer()
+    
+    if interaction.channel.id not in deleted_messages:
+        await interaction.followup.send("🔫 Nothing to snipe! No deleted messages in this channel.", ephemeral=True)
+        return
+    
+    msg = deleted_messages[interaction.channel.id]
+    time_diff = (datetime.now() - msg["time"]).seconds
+    
+    if time_diff < 60:
+        time_text = f"{time_diff}s ago"
+    elif time_diff < 3600:
+        time_text = f"{time_diff // 60}m ago"
+    else:
+        time_text = f"{time_diff // 3600}h ago"
+    
+    embed = discord.Embed(
+        description=msg["content"][:2000],
+        color=0xDC2626,
+        timestamp=msg["time"]
+    )
+    embed.set_author(name=f"🗑️ {msg['author']}", icon_url=msg["author_avatar"])
+    embed.set_footer(text=f"Deleted {time_text}")
+    
+    if msg["attachments"]:
+        attach_text = "\n".join(msg["attachments"][:3])
+        embed.add_field(name="📎 Attachments", value=attach_text[:1024], inline=False)
+        if len(msg["attachments"]) > 1:
+            embed.set_image(url=msg["attachments"][0])
+    
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="editsnipe", description="✏️ Show the last edited message in this channel")
+async def editsnipe(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    await interaction.response.defer()
+    
+    if interaction.channel.id not in edited_messages:
+        await interaction.followup.send("✏️ Nothing to editsnipe! No edited messages in this channel.", ephemeral=True)
+        return
+    
+    msg = edited_messages[interaction.channel.id]
+    time_diff = (datetime.now() - msg["time"]).seconds
+    
+    if time_diff < 60:
+        time_text = f"{time_diff}s ago"
+    elif time_diff < 3600:
+        time_text = f"{time_diff // 60}m ago"
+    else:
+        time_text = f"{time_diff // 3600}h ago"
+    
+    embed = discord.Embed(color=0xF59E0B, timestamp=msg["time"])
+    embed.set_author(name=f"✏️ {msg['author']}", icon_url=msg["author_avatar"])
+    embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
+    embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
+    embed.set_footer(text=f"Edited {time_text}")
+    
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="snipe_clear", description="🧹 Clear snipe history in this channel (Manage Messages permission)")
+@app_commands.default_permissions(manage_messages=True)
+async def snipe_clear(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("❌ You need Manage Messages permission!", ephemeral=True)
+        return
+    
+    cleared = 0
+    if interaction.channel.id in deleted_messages:
+        del deleted_messages[interaction.channel.id]
+        cleared += 1
+    if interaction.channel.id in edited_messages:
+        del edited_messages[interaction.channel.id]
+        cleared += 1
+    
+    if cleared:
+        await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s) for this channel!", ephemeral=True)
+    else:
+        await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
+
 # ========== BACKUP AND RESTORE COMMANDS ==========
 
 @bot.tree.command(name="backup", description="Download all database files for backup")
@@ -1577,6 +1694,12 @@ async def help_command(interaction: discord.Interaction):
     )
     
     embed.add_field(
+        name="🔫 **Snipe**",
+        value="`/snipe` - Show last deleted message\n`/editsnipe` - Show last edited message\n`/snipe_clear` - Clear snipe history",
+        inline=False
+    )
+    
+    embed.add_field(
         name="💾 **Backup & Restore**",
         value="`/backup` - Download all database files\n`/restore` - Upload files to restore data",
         inline=False
@@ -1643,6 +1766,7 @@ if __name__ == "__main__":
     print("🎮 LFM system: ACTIVE (5-min cooldown)")
     print("🛡️ SquadHelp system: ACTIVE (15-min cooldown)")
     print("⚔️ DRHelp system: ACTIVE (5-min cooldown)")
+    print("🔫 Snipe system: ACTIVE")
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     print("🧹 Memory cleanup: ACTIVE (every hour)")
     print("🏥 Health monitoring: ACTIVE")
