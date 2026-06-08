@@ -16,61 +16,82 @@ import io
 import sys
 import signal
 import aiohttp
+import gc
+from contextlib import contextmanager
 
 # ========== DATABASE SETUP ==========
 
+@contextmanager
+def db_connection(db_name, timeout=10):
+    """Context manager for safe database connections"""
+    conn = None
+    try:
+        conn = sqlite3.connect(db_name, timeout=timeout)
+        conn.row_factory = sqlite3.Row
+        yield conn
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
+
 # Initialize announcements database
 def init_announcements_db():
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS announcements
-                 (id TEXT PRIMARY KEY,
-                  title TEXT,
-                  description TEXT,
-                  role_id TEXT,
-                  channel_id TEXT,
-                  announce_time TEXT,
-                  created_by TEXT,
-                  created_by_name TEXT,
-                  created_at TEXT,
-                  status TEXT)''')
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS announcements
+                         (id TEXT PRIMARY KEY,
+                          title TEXT,
+                          description TEXT,
+                          role_id TEXT,
+                          channel_id TEXT,
+                          announce_time TEXT,
+                          created_by TEXT,
+                          created_by_name TEXT,
+                          created_at TEXT,
+                          status TEXT)''')
+            conn.commit()
+    except Exception as e:
+        print(f"❌ Error initializing announcements DB: {e}")
 
 # Initialize LFM database for GLOBAL cooldowns
 def init_lfm_db():
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    
-    # LFM cooldown table (5 minutes = 300 seconds)
-    c.execute('''CREATE TABLE IF NOT EXISTS lfm_global_cooldown
-                 (id INTEGER PRIMARY KEY CHECK (id = 1),
-                  last_used TIMESTAMP,
-                  last_user_id TEXT,
-                  last_user_name TEXT)''')
-    c.execute("INSERT OR IGNORE INTO lfm_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
-              (datetime.now().isoformat(), "0", "None"))
-    
-    # SquadHelp cooldown table (15 minutes = 900 seconds)
-    c.execute('''CREATE TABLE IF NOT EXISTS squadhelp_global_cooldown
-                 (id INTEGER PRIMARY KEY CHECK (id = 1),
-                  last_used TIMESTAMP,
-                  last_user_id TEXT,
-                  last_user_name TEXT)''')
-    c.execute("INSERT OR IGNORE INTO squadhelp_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
-              (datetime.now().isoformat(), "0", "None"))
-    
-    # DRHelp cooldown table (5 minutes = 300 seconds)
-    c.execute('''CREATE TABLE IF NOT EXISTS drhelp_global_cooldown
-                 (id INTEGER PRIMARY KEY CHECK (id = 1),
-                  last_used TIMESTAMP,
-                  last_user_id TEXT,
-                  last_user_name TEXT)''')
-    c.execute("INSERT OR IGNORE INTO drhelp_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
-              (datetime.now().isoformat(), "0", "None"))
-    
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            
+            # LFM cooldown table (5 minutes = 300 seconds)
+            c.execute('''CREATE TABLE IF NOT EXISTS lfm_global_cooldown
+                         (id INTEGER PRIMARY KEY CHECK (id = 1),
+                          last_used TIMESTAMP,
+                          last_user_id TEXT,
+                          last_user_name TEXT)''')
+            c.execute("INSERT OR IGNORE INTO lfm_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
+                      (datetime.now().isoformat(), "0", "None"))
+            
+            # SquadHelp cooldown table (15 minutes = 900 seconds)
+            c.execute('''CREATE TABLE IF NOT EXISTS squadhelp_global_cooldown
+                         (id INTEGER PRIMARY KEY CHECK (id = 1),
+                          last_used TIMESTAMP,
+                          last_user_id TEXT,
+                          last_user_name TEXT)''')
+            c.execute("INSERT OR IGNORE INTO squadhelp_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
+                      (datetime.now().isoformat(), "0", "None"))
+            
+            # DRHelp cooldown table (5 minutes = 300 seconds)
+            c.execute('''CREATE TABLE IF NOT EXISTS drhelp_global_cooldown
+                         (id INTEGER PRIMARY KEY CHECK (id = 1),
+                          last_used TIMESTAMP,
+                          last_user_id TEXT,
+                          last_user_name TEXT)''')
+            c.execute("INSERT OR IGNORE INTO drhelp_global_cooldown (id, last_used, last_user_id, last_user_name) VALUES (1, ?, ?, ?)",
+                      (datetime.now().isoformat(), "0", "None"))
+            
+            conn.commit()
+    except Exception as e:
+        print(f"❌ Error initializing LFM DB: {e}")
 
 # Call these when bot starts
 print("📁 Initializing databases...")
@@ -78,94 +99,112 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
+# ========== COOLDOWN FUNCTIONS ==========
+
 # LFM Global Cooldown functions (5 minutes)
 def check_lfm_global_cooldown():
     """Check if LFM is on global cooldown"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    c.execute("SELECT last_used, last_user_id, last_user_name FROM lfm_global_cooldown WHERE id = 1")
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        last_used = datetime.fromisoformat(result[0])
-        last_user_id = result[1]
-        last_user_name = result[2]
-        time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 300:  # 5 minutes
-            remaining = 300 - time_passed.total_seconds()
-            return True, remaining, last_user_id, last_user_name
-    return False, 0, None, None
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            c.execute("SELECT last_used, last_user_id, last_user_name FROM lfm_global_cooldown WHERE id = 1")
+            result = c.fetchone()
+            
+            if result:
+                last_used = datetime.fromisoformat(result[0])
+                last_user_id = result[1]
+                last_user_name = result[2]
+                time_passed = datetime.now() - last_used
+                if time_passed.total_seconds() < 300:  # 5 minutes
+                    remaining = 300 - time_passed.total_seconds()
+                    return True, remaining, last_user_id, last_user_name
+        return False, 0, None, None
+    except Exception as e:
+        print(f"⚠️ Error checking LFM cooldown: {e}")
+        return False, 0, None, None
 
 def update_lfm_global_cooldown(user_id, user_name):
     """Update global cooldown with who used it"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    now = datetime.now().isoformat()
-    c.execute("UPDATE lfm_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
-              (now, user_id, user_name))
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            c.execute("UPDATE lfm_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
+                      (now, user_id, user_name))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error updating LFM cooldown: {e}")
 
 # SquadHelp Global Cooldown functions (15 minutes)
 def check_squadhelp_global_cooldown():
     """Check if SquadHelp is on global cooldown"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    c.execute("SELECT last_used, last_user_id, last_user_name FROM squadhelp_global_cooldown WHERE id = 1")
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        last_used = datetime.fromisoformat(result[0])
-        last_user_id = result[1]
-        last_user_name = result[2]
-        time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 900:  # 15 minutes
-            remaining = 900 - time_passed.total_seconds()
-            return True, remaining, last_user_id, last_user_name
-    return False, 0, None, None
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            c.execute("SELECT last_used, last_user_id, last_user_name FROM squadhelp_global_cooldown WHERE id = 1")
+            result = c.fetchone()
+            
+            if result:
+                last_used = datetime.fromisoformat(result[0])
+                last_user_id = result[1]
+                last_user_name = result[2]
+                time_passed = datetime.now() - last_used
+                if time_passed.total_seconds() < 900:  # 15 minutes
+                    remaining = 900 - time_passed.total_seconds()
+                    return True, remaining, last_user_id, last_user_name
+        return False, 0, None, None
+    except Exception as e:
+        print(f"⚠️ Error checking SquadHelp cooldown: {e}")
+        return False, 0, None, None
 
 def update_squadhelp_global_cooldown(user_id, user_name):
     """Update SquadHelp global cooldown with who used it"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    now = datetime.now().isoformat()
-    c.execute("UPDATE squadhelp_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
-              (now, user_id, user_name))
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            c.execute("UPDATE squadhelp_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
+                      (now, user_id, user_name))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error updating SquadHelp cooldown: {e}")
 
 # DRHelp Global Cooldown functions (5 minutes)
 def check_drhelp_global_cooldown():
     """Check if DRHelp is on global cooldown"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    c.execute("SELECT last_used, last_user_id, last_user_name FROM drhelp_global_cooldown WHERE id = 1")
-    result = c.fetchone()
-    conn.close()
-    
-    if result:
-        last_used = datetime.fromisoformat(result[0])
-        last_user_id = result[1]
-        last_user_name = result[2]
-        time_passed = datetime.now() - last_used
-        if time_passed.total_seconds() < 300:  # 5 minutes
-            remaining = 300 - time_passed.total_seconds()
-            return True, remaining, last_user_id, last_user_name
-    return False, 0, None, None
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            c.execute("SELECT last_used, last_user_id, last_user_name FROM drhelp_global_cooldown WHERE id = 1")
+            result = c.fetchone()
+            
+            if result:
+                last_used = datetime.fromisoformat(result[0])
+                last_user_id = result[1]
+                last_user_name = result[2]
+                time_passed = datetime.now() - last_used
+                if time_passed.total_seconds() < 300:  # 5 minutes
+                    remaining = 300 - time_passed.total_seconds()
+                    return True, remaining, last_user_id, last_user_name
+        return False, 0, None, None
+    except Exception as e:
+        print(f"⚠️ Error checking DRHelp cooldown: {e}")
+        return False, 0, None, None
 
 def update_drhelp_global_cooldown(user_id, user_name):
     """Update DRHelp global cooldown with who used it"""
-    conn = sqlite3.connect('lfm.db')
-    c = conn.cursor()
-    now = datetime.now().isoformat()
-    c.execute("UPDATE drhelp_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
-              (now, user_id, user_name))
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('lfm.db') as conn:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            c.execute("UPDATE drhelp_global_cooldown SET last_used = ?, last_user_id = ?, last_user_name = ? WHERE id = 1",
+                      (now, user_id, user_name))
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Error updating DRHelp cooldown: {e}")
 
-# Function to parse timestamp from various formats
+# ========== TIMESTAMP PARSING ==========
+
 def parse_timestamp(timestamp_str):
     """Parse timestamp from various formats (Unix timestamp or Discord timestamp)"""
     timestamp_str = timestamp_str.strip()
@@ -187,65 +226,67 @@ def parse_timestamp(timestamp_str):
     
     return None
 
-# Function to add announcement
+# ========== ANNOUNCEMENT DATABASE FUNCTIONS ==========
+
 def add_announcement_to_db(title, description, role_id, channel_id, announce_time, created_by, created_by_name):
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    announcement_id = str(uuid.uuid4())[:8]
-    c.execute("INSERT INTO announcements (id, title, description, role_id, channel_id, announce_time, created_by, created_by_name, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              (announcement_id, title, description, role_id, channel_id, announce_time.isoformat(), created_by, created_by_name, datetime.now().isoformat(), "pending"))
-    conn.commit()
-    conn.close()
-    return announcement_id
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            announcement_id = str(uuid.uuid4())[:8]
+            c.execute("INSERT INTO announcements (id, title, description, role_id, channel_id, announce_time, created_by, created_by_name, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                      (announcement_id, title, description, role_id, channel_id, announce_time.isoformat(), created_by, created_by_name, datetime.now().isoformat(), "pending"))
+            conn.commit()
+            return announcement_id
+    except Exception as e:
+        print(f"❌ Error adding announcement: {e}")
+        return None
 
-# Function to get pending announcements
 def get_pending_announcements():
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    now = datetime.now().isoformat()
-    c.execute("SELECT * FROM announcements WHERE status = 'pending' AND announce_time <= ?", (now,))
-    announcements = c.fetchall()
-    conn.close()
-    return announcements
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            now = datetime.now().isoformat()
+            c.execute("SELECT * FROM announcements WHERE status = 'pending' AND announce_time <= ?", (now,))
+            announcements = c.fetchall()
+            return announcements
+    except Exception as e:
+        print(f"❌ Error getting pending announcements: {e}")
+        return []
 
-# Function to update announcement status
 def update_announcement_status(announcement_id, status):
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    c.execute("UPDATE announcements SET status = ? WHERE id = ?", (status, announcement_id))
-    conn.commit()
-    conn.close()
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            c.execute("UPDATE announcements SET status = ? WHERE id = ?", (status, announcement_id))
+            conn.commit()
+    except Exception as e:
+        print(f"❌ Error updating announcement status: {e}")
 
-# Function to get user's announcements
 def get_user_announcements(created_by):
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM announcements WHERE created_by = ? ORDER BY announce_time", (created_by,))
-    announcements = c.fetchall()
-    conn.close()
-    return announcements
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            c.execute("SELECT * FROM announcements WHERE created_by = ? ORDER BY announce_time", (created_by,))
+            announcements = c.fetchall()
+            return announcements
+    except Exception as e:
+        print(f"❌ Error getting user announcements: {e}")
+        return []
 
-# Function to delete announcement
-def delete_announcement(announcement_id, created_by):
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM announcements WHERE id = ? AND created_by = ?", (announcement_id, created_by))
-    rows_affected = c.rowcount
-    conn.commit()
-    conn.close()
-    return rows_affected > 0
-
-# Function to cancel announcement
 def cancel_announcement(announcement_id, created_by):
-    conn = sqlite3.connect('announcements.db')
-    c = conn.cursor()
-    c.execute("UPDATE announcements SET status = 'cancelled' WHERE id = ? AND created_by = ?", (announcement_id, created_by))
-    rows_affected = c.rowcount
-    conn.commit()
-    conn.close()
-    return rows_affected > 0
+    try:
+        with db_connection('announcements.db') as conn:
+            c = conn.cursor()
+            c.execute("UPDATE announcements SET status = 'cancelled' WHERE id = ? AND created_by = ?", (announcement_id, created_by))
+            rows_affected = c.rowcount
+            conn.commit()
+            return rows_affected > 0
+    except Exception as e:
+        print(f"❌ Error cancelling announcement: {e}")
+        return False
 
-# Load formations data
+# ========== DATA LOADING FUNCTIONS ==========
+
 def load_formations():
     try:
         with open('formations.json', 'r') as f:
@@ -259,7 +300,6 @@ def load_formations():
             }
         }
 
-# Load redeem codes
 def load_redeem_codes():
     try:
         with open('redeem_codes.json', 'r') as f:
@@ -278,7 +318,6 @@ def load_redeem_codes():
         save_redeem_codes(default_codes)
         return default_codes
 
-# Save redeem codes
 def save_redeem_codes(data):
     try:
         with open('redeem_codes.json', 'w') as f:
@@ -288,7 +327,6 @@ def save_redeem_codes(data):
         print(f"Error saving redeem codes: {e}")
         return False
 
-# Check if user has permission to manage redeem codes
 def can_manage_redeem_codes(user_id):
     authorized_users = [
         1214456066687893506,
@@ -297,7 +335,8 @@ def can_manage_redeem_codes(user_id):
     ]
     return user_id in authorized_users
 
-# Common timezone abbreviations mapping
+# ========== TIMEZONE MAPPING ==========
+
 TIMEZONE_MAPPING = {
     "EST": "America/New_York",
     "EDT": "America/New_York",
@@ -360,6 +399,28 @@ def get_timezone_from_abbreviation(abbr):
         pass
     return None
 
+# ========== HEALTH CHECK SYSTEM ==========
+
+class BotHealthChecker:
+    def __init__(self):
+        self.start_time = datetime.now()
+        self.command_count = 0
+        self.error_count = 0
+        self.last_error = None
+    
+    def check_health(self):
+        uptime = datetime.now() - self.start_time
+        return {
+            "uptime": str(uptime).split('.')[0],  # Remove microseconds
+            "commands": self.command_count,
+            "errors": self.error_count,
+            "last_error": str(self.last_error)[:100] if self.last_error else "None"
+        }
+
+health_checker = BotHealthChecker()
+
+# ========== BOT CLASS ==========
+
 class FCOHomiesBot(commands.Bot):
     def __init__(self):
         super().__init__(
@@ -374,7 +435,6 @@ class FCOHomiesBot(commands.Bot):
         self.drhelp_role_id = 1446014580081037314
 
     async def setup_hook(self):
-        # Wait to avoid rate limits on startup
         print("🔄 Waiting 5 seconds before syncing commands to avoid rate limits...")
         await asyncio.sleep(5)
         print("🔄 Syncing slash commands...")
@@ -384,7 +444,6 @@ class FCOHomiesBot(commands.Bot):
         except discord.errors.HTTPException as e:
             if e.status == 429:
                 print("⚠️ Rate limited while syncing commands. Will retry later.")
-                # Retry after 10 seconds
                 await asyncio.sleep(10)
                 try:
                     synced = await self.tree.sync()
@@ -397,6 +456,8 @@ class FCOHomiesBot(commands.Bot):
             print(f"❌ Error syncing commands: {e}")
 
 bot = FCOHomiesBot()
+
+# ========== BOT EVENTS ==========
 
 @bot.event
 async def on_ready():
@@ -411,11 +472,14 @@ async def on_ready():
     print(f'⚔️ DRHelp system: Active (5-min GLOBAL cooldown)')
     print(f'💾 Backup/Restore system: Active')
     print(f'🔄 Self-ping system: Active (every 14 minutes)')
+    print(f'🧹 Memory cleanup: Active (every hour)')
     
+    # Start background tasks
     bot.loop.create_task(check_announcements())
-    bot.loop.create_task(self_ping())  # Start self-pinging to keep bot alive
+    bot.loop.create_task(self_ping())
+    bot.loop.create_task(memory_cleanup())
     
-    # Wait a bit before fetching commands to avoid rate limits
+    # Fetch commands after a delay
     await asyncio.sleep(3)
     try:
         commands = await bot.tree.fetch_commands()
@@ -435,28 +499,60 @@ async def on_ready():
         name="Ω Lite | /help"
     ))
 
-# ========== SELF-PING FUNCTION TO KEEP BOT ALIVE ==========
+@bot.event
+async def on_command_error(interaction: discord.Interaction, error):
+    health_checker.error_count += 1
+    health_checker.last_error = error
+    print(f"❌ Command error from {interaction.user}: {error}")
+
+# ========== BACKGROUND TASKS ==========
+
 async def self_ping():
-    """Ping the external URL every 14 minutes to trick Render's idle detector"""
+    """Ping the external URL every 14 minutes with better error handling"""
     await bot.wait_until_ready()
     
-    # NOTE: Set this environment variable in Render, or replace the fallback string with your actual URL
     RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
+    consecutive_failures = 0
     
     while not bot.is_closed():
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(RENDER_EXTERNAL_URL) as response:
                     if response.status == 200:
                         print(f"🔄 External ping sent at {datetime.now().strftime('%H:%M:%S')} - Bot kept alive")
+                        consecutive_failures = 0
                     else:
                         print(f"⚠️ External ping returned status: {response.status}")
+                        consecutive_failures += 1
+        except asyncio.TimeoutError:
+            print(f"⚠️ External ping timed out")
+            consecutive_failures += 1
         except Exception as e:
-            print(f"⚠️ External ping failed: {e}. Ensure RENDER_EXTERNAL_URL is correct.")
+            print(f"⚠️ External ping failed: {e}")
+            consecutive_failures += 1
         
-        await asyncio.sleep(840)  # Ping every 14 minutes (840 seconds). Render sleeps at 15m.
+        # If too many failures, try to recover
+        if consecutive_failures > 5:
+            print("🔄 Too many ping failures, attempting recovery...")
+            consecutive_failures = 0
+            gc.collect()
+        
+        await asyncio.sleep(840)  # Ping every 14 minutes
 
-# ========== ANNOUNCEMENT BACKGROUND TASK ==========
+async def memory_cleanup():
+    """Periodically clean up memory to prevent leaks"""
+    await bot.wait_until_ready()
+    
+    while not bot.is_closed():
+        await asyncio.sleep(3600)  # Run every hour
+        try:
+            before = gc.get_count()
+            gc.collect()
+            after = gc.get_count()
+            print(f"🧹 Memory cleanup performed at {datetime.now().strftime('%H:%M:%S')}")
+        except Exception as e:
+            print(f"⚠️ Memory cleanup error: {e}")
 
 async def check_announcements():
     await bot.wait_until_ready()
@@ -470,8 +566,6 @@ async def check_announcements():
                 description = announcement[2]
                 role_id = announcement[3]
                 channel_id = announcement[4]
-                announce_time_str = announcement[5]
-                created_by = announcement[6]
                 created_by_name = announcement[7]
                 
                 try:
@@ -508,7 +602,7 @@ async def check_announcements():
             print(f"❌ Error in announcement checker: {e}")
             await asyncio.sleep(60)
 
-# ========== ANNOUNCEMENT COMMANDS WITH TIMESTAMP ==========
+# ========== ANNOUNCEMENT COMMANDS ==========
 
 @bot.tree.command(name="announce", description="Schedule an announcement with role ping using timestamp")
 @app_commands.describe(
@@ -525,10 +619,10 @@ async def schedule_announcement(
     timestamp: str
 ):
     """Schedule an announcement using a timestamp"""
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     try:
-        # Parse the timestamp
         ts = parse_timestamp(timestamp)
         
         if ts is None:
@@ -541,29 +635,28 @@ async def schedule_announcement(
             )
             return
         
-        # Convert timestamp to datetime
         announce_time = datetime.fromtimestamp(ts, tz=pytz.UTC)
         now = datetime.now(pytz.UTC)
         
-        # Check if time is in the future
         if announce_time <= now:
             await interaction.followup.send("❌ Announcement time must be in the future!", ephemeral=True)
             return
         
-        # Add to database
         announcement_id = add_announcement_to_db(
             title, description, str(role.id), str(interaction.channel_id),
             announce_time, str(interaction.user.id), interaction.user.name
         )
         
-        # Create embed
+        if not announcement_id:
+            await interaction.followup.send("❌ Failed to schedule announcement. Please try again.", ephemeral=True)
+            return
+        
         embed = discord.Embed(
             title="✅ Announcement Scheduled!",
             description=f"I'll announce this in {interaction.channel.mention}",
             color=0x10B981
         )
         
-        # Format time display
         time_diff = announce_time - now
         days = time_diff.days
         hours = time_diff.seconds // 3600
@@ -598,10 +691,13 @@ async def schedule_announcement(
         await interaction.followup.send(embed=embed, ephemeral=True)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="announce_list", description="View all your scheduled announcements")
 async def list_announcements(interaction: discord.Interaction):
+    health_checker.command_count += 1
     announcements = get_user_announcements(str(interaction.user.id))
     
     if not announcements:
@@ -640,6 +736,7 @@ async def list_announcements(interaction: discord.Interaction):
 @bot.tree.command(name="announce_cancel", description="Cancel a scheduled announcement")
 @app_commands.describe(announcement_id="The ID of the announcement to cancel")
 async def cancel_announcement_command(interaction: discord.Interaction, announcement_id: str):
+    health_checker.command_count += 1
     success = cancel_announcement(announcement_id, str(interaction.user.id))
     
     if success:
@@ -647,10 +744,11 @@ async def cancel_announcement_command(interaction: discord.Interaction, announce
     else:
         await interaction.response.send_message(f"❌ Announcement `{announcement_id}` not found or doesn't belong to you!", ephemeral=True)
 
-# ========== LFM COMMAND ==========
+# ========== LFM COMMANDS ==========
 
 @bot.tree.command(name="lfm", description="Looking for match - Pings the LFM role (5-min GLOBAL cooldown)")
 async def lfm_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     try:
@@ -717,10 +815,13 @@ async def lfm_command(interaction: discord.Interaction):
         await interaction.followup.send(embed=confirm_embed, ephemeral=True)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="lfm_status", description="Check LFM global cooldown status")
 async def lfm_status_check(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     on_cooldown, remaining, last_user_id, last_user_name = check_lfm_global_cooldown()
@@ -750,10 +851,11 @@ async def lfm_status_check(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite | LFM System (5-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ========== SQUADHELP COMMAND (15 MINUTE COOLDOWN) ==========
+# ========== SQUADHELP COMMANDS ==========
 
 @bot.tree.command(name="squadhelp", description="Request help with your squad - Pings the SquadHelp role (15-min GLOBAL cooldown)")
 async def squadhelp_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     try:
@@ -820,10 +922,13 @@ async def squadhelp_command(interaction: discord.Interaction):
         await interaction.followup.send(embed=confirm_embed, ephemeral=True)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="squadhelp_status", description="Check SquadHelp global cooldown status")
 async def squadhelp_status_check(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     on_cooldown, remaining, last_user_id, last_user_name = check_squadhelp_global_cooldown()
@@ -853,10 +958,11 @@ async def squadhelp_status_check(interaction: discord.Interaction):
     embed.set_footer(text="Ω Lite | SquadHelp System (15-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ========== DRHELP COMMAND ==========
+# ========== DRHELP COMMANDS ==========
 
 @bot.tree.command(name="drhelp", description="Request help with Division Rivals - Pings the DRHelp role (5-min GLOBAL cooldown)")
 async def drhelp_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     try:
@@ -923,10 +1029,13 @@ async def drhelp_command(interaction: discord.Interaction):
         await interaction.followup.send(embed=confirm_embed, ephemeral=True)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="drhelp_status", description="Check DRHelp global cooldown status")
 async def drhelp_status_check(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     
     on_cooldown, remaining, last_user_id, last_user_name = check_drhelp_global_cooldown()
@@ -966,10 +1075,10 @@ async def drhelp_status_check(interaction: discord.Interaction):
     total_max_badges="Total max badges (optional)"
 )
 async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values: str, rankup_values: str, total_max_badges: int = 0):
+    health_checker.command_count += 1
     await interaction.response.defer()
     
     try:
-        # Parse the input strings into lists
         base_list = [int(x.strip()) for x in base_ovr_values.split('+')]
         rank_list = [int(x.strip()) for x in rankup_values.split('+')]
         
@@ -981,7 +1090,6 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
             await interaction.followup.send(f"❌ Expected {count} values each! Got {len(base_list)} base and {len(rank_list)} rankup values.", ephemeral=True)
             return
         
-        # Keep original calculation logic
         base_total = sum(base_list)
         rank_total = sum(rank_list)
         
@@ -1017,10 +1125,13 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
     except ValueError:
         await interaction.followup.send("❌ Please enter valid numbers separated by +", ephemeral=True)
     except Exception as e:
-        print(f"OVR command error: {e}")  # This will show in your bot console
+        health_checker.error_count += 1
+        health_checker.last_error = e
+        print(f"OVR command error: {e}")
         await interaction.followup.send(f"❌ Error calculating OVR. Please check your input format.", ephemeral=True)
 
-# Investment Calculator
+# ========== INVEST COMMAND ==========
+
 @bot.tree.command(name="invest", description="Calculate investment profit/loss with 10% tax")
 @app_commands.describe(
     buy_price="Buying price per item",
@@ -1029,6 +1140,7 @@ async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values
     sell_quantity="Quantity to sell"
 )
 async def invest_calc(interaction: discord.Interaction, buy_price: float, buy_quantity: int, sell_price: float, sell_quantity: int):
+    health_checker.command_count += 1
     await interaction.response.defer()
     
     try:
@@ -1065,15 +1177,19 @@ async def invest_calc(interaction: discord.Interaction, buy_price: float, buy_qu
         await interaction.followup.send(embed=embed)
             
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-# Timezone Converter
+# ========== TIMEZONE COMMANDS ==========
+
 @bot.tree.command(name="timezone", description="Convert UTC time to any timezone")
 @app_commands.describe(
     utc_time="UTC time or 'now'",
     timezone="Target timezone (e.g., EST, GMT, IST)"
 )
 async def timezone_convert(interaction: discord.Interaction, utc_time: str, timezone: str):
+    health_checker.command_count += 1
     await interaction.response.defer()
     
     try:
@@ -1106,9 +1222,10 @@ async def timezone_convert(interaction: discord.Interaction, utc_time: str, time
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-# Date to Timestamp
 @bot.tree.command(name="datetotimestamp", description="Convert date and time to Unix timestamp")
 @app_commands.describe(
     date="Date in YYYY-MM-DD",
@@ -1116,6 +1233,7 @@ async def timezone_convert(interaction: discord.Interaction, utc_time: str, time
     timezone="Timezone abbreviation"
 )
 async def date_to_timestamp(interaction: discord.Interaction, date: str, time: str = "00:00:00", timezone: str = "UTC"):
+    health_checker.command_count += 1
     await interaction.response.defer()
     
     try:
@@ -1150,9 +1268,12 @@ async def date_to_timestamp(interaction: discord.Interaction, date: str, time: s
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-# Formations Command
+# ========== FORMATIONS COMMAND ==========
+
 @bot.tree.command(name="formations", description="Get best formations for different game modes")
 @app_commands.choices(game_mode=[
     app_commands.Choice(name="Manager Mode", value="manager_mode"),
@@ -1160,6 +1281,7 @@ async def date_to_timestamp(interaction: discord.Interaction, date: str, time: s
     app_commands.Choice(name="Head to Head", value="head_to_head")
 ])
 async def formations_command(interaction: discord.Interaction, game_mode: str):
+    health_checker.command_count += 1
     try:
         formations_data = bot.formations_data
         game_mode_display = {
@@ -1185,12 +1307,15 @@ async def formations_command(interaction: discord.Interaction, game_mode: str):
         await interaction.response.send_message(embed=embed)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== REDEEM CODE COMMANDS ==========
 
 @bot.tree.command(name="redeem", description="View active FC Mobile redeem codes")
 async def redeem_codes(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer()
     
     try:
@@ -1212,11 +1337,14 @@ async def redeem_codes(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="redeem_add", description="Add redeem code (Authorized only)")
 @app_commands.describe(code="Code", reward="Reward", active="Active status")
 async def redeem_add(interaction: discord.Interaction, code: str, reward: str, active: bool = True):
+    health_checker.command_count += 1
     if not can_manage_redeem_codes(interaction.user.id):
         await interaction.response.send_message("❌ Authorized only!", ephemeral=True)
         return
@@ -1245,11 +1373,14 @@ async def redeem_add(interaction: discord.Interaction, code: str, reward: str, a
             await interaction.followup.send("❌ Failed to save!", ephemeral=True)
             
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 @bot.tree.command(name="redeem_remove", description="Remove redeem code (Authorized only)")
 @app_commands.describe(code="Code to remove")
 async def redeem_remove(interaction: discord.Interaction, code: str):
+    health_checker.command_count += 1
     if not can_manage_redeem_codes(interaction.user.id):
         await interaction.response.send_message("❌ Authorized only!", ephemeral=True)
         return
@@ -1271,12 +1402,15 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
             await interaction.followup.send(f"❌ Code not found!", ephemeral=True)
             
     except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = e
         await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== UTILITY COMMANDS ==========
 
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
+    health_checker.command_count += 1
     latency = round(bot.latency * 1000)
     embed = discord.Embed(
         title="⚡ Ω Lite Status",
@@ -1285,6 +1419,34 @@ async def ping(interaction: discord.Interaction):
     )
     embed.set_footer(text="Ω Lite")
     await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="health", description="Check bot health and statistics (Owner only)")
+async def health_check_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
+        await interaction.response.send_message("❌ Authorized only!", ephemeral=True)
+        return
+    
+    health = health_checker.check_health()
+    
+    embed = discord.Embed(title="🏥 Ω Lite Health Report", color=0x8B5CF6)
+    embed.add_field(name="⏱️ Uptime", value=health["uptime"], inline=False)
+    embed.add_field(name="📊 Commands Processed", value=health["commands"], inline=True)
+    embed.add_field(name="❌ Errors", value=health["errors"], inline=True)
+    embed.add_field(name="🔌 Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
+    embed.add_field(name="💾 Last Error", value=health["last_error"], inline=False)
+    embed.add_field(name="🔄 Servers", value=len(bot.guilds), inline=True)
+    
+    # Check database health
+    try:
+        with db_connection('lfm.db') as conn:
+            conn.cursor().execute("SELECT 1")
+        embed.add_field(name="🗄️ Database", value="✅ Connected", inline=True)
+    except:
+        embed.add_field(name="🗄️ Database", value="❌ Error", inline=True)
+    
+    embed.set_footer(text="Ω Lite | Health Monitor")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="sync", description="Sync commands (Owner only)")
 async def sync_commands(interaction: discord.Interaction):
@@ -1301,6 +1463,7 @@ async def sync_commands(interaction: discord.Interaction):
 
 @bot.tree.command(name="timezones", description="Show available timezone abbreviations")
 async def timezone_help(interaction: discord.Interaction):
+    health_checker.command_count += 1
     embed = discord.Embed(title="🌍 Timezone Abbreviations", color=0x8B5CF6)
     embed.add_field(name="Americas", value="EST, CST, MST, PST, EDT, CDT, MDT, PDT", inline=False)
     embed.add_field(name="Europe", value="GMT, BST, UTC, CET, CEST, EET, EEST", inline=False)
@@ -1313,7 +1476,7 @@ async def timezone_help(interaction: discord.Interaction):
 
 @bot.tree.command(name="backup", description="Download all database files for backup")
 async def backup_command(interaction: discord.Interaction):
-    """Download all database files for backup"""
+    health_checker.command_count += 1
     if interaction.user.id not in [1214456066687893506, 553418145063239684]:
         await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
         return
@@ -1343,7 +1506,7 @@ async def backup_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="restore", description="Restore database files from backup")
 async def restore_command(interaction: discord.Interaction, file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None, file4: discord.Attachment = None, file5: discord.Attachment = None):
-    """Restore database files from uploaded backup files"""
+    health_checker.command_count += 1
     if interaction.user.id not in [1214456066687893506, 553418145063239684]:
         await interaction.response.send_message("❌ Authorized users only!", ephemeral=True)
         return
@@ -1365,17 +1528,14 @@ async def restore_command(interaction: discord.Interaction, file1: discord.Attac
     failed_files = []
     
     for attachment in files:
-        # Check if it's a valid backup file
         valid_extensions = ['.db', '.json']
         if not any(attachment.filename.endswith(ext) for ext in valid_extensions):
             failed_files.append(f"{attachment.filename} (invalid file type)")
             continue
         
         try:
-            # Download the file
             file_data = await attachment.read()
             
-            # Save to current directory
             with open(attachment.filename, 'wb') as f:
                 f.write(file_data)
             
@@ -1384,7 +1544,6 @@ async def restore_command(interaction: discord.Interaction, file1: discord.Attac
         except Exception as e:
             failed_files.append(f"{attachment.filename} ({str(e)})")
     
-    # Create result embed
     embed = discord.Embed(
         title="🔄 Restore Results",
         color=0x10B981 if restored_files else 0xDC2626,
@@ -1408,6 +1567,7 @@ async def restore_command(interaction: discord.Interaction, file1: discord.Attac
 
 @bot.tree.command(name="help", description="Get help with commands")
 async def help_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
     embed = discord.Embed(
         title="⚡ Ω Lite - Help",
         description="**FC Mobile Discord Bot**",
@@ -1452,7 +1612,7 @@ async def help_command(interaction: discord.Interaction):
     
     embed.add_field(
         name="🔧 **Utilities**",
-        value="`/ping` - Check status\n`/help` - This menu",
+        value="`/ping` - Check status\n`/help` - This menu\n`/health` - Bot health stats (Admin)",
         inline=False
     )
     
@@ -1472,7 +1632,6 @@ app = Flask('')
 @app.route('/')
 def home():
     try:
-        # Check if bot is ready before accessing attributes
         if bot.is_ready():
             latency = round(bot.latency * 1000)
             servers = len(bot.guilds)
@@ -1483,13 +1642,12 @@ def home():
         return f"⚡ Ω Lite Status: Bot starting or encountered issue"
 
 def run():
-    # Use Render's provided PORT environment variable, fallback to 8080
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
-    t.daemon = True  # Ensures thread closes cleanly when bot stops
+    t.daemon = True
     t.start()
 
 # ========== START BOT ==========
@@ -1514,6 +1672,8 @@ if __name__ == "__main__":
     print("🛡️ SquadHelp system: ACTIVE (15-min cooldown)")
     print("⚔️ DRHelp system: ACTIVE (5-min cooldown)")
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
+    print("🧹 Memory cleanup: ACTIVE (every hour)")
+    print("🏥 Health monitoring: ACTIVE")
     print("=" * 50)
     
     # Handle graceful shutdown
