@@ -402,13 +402,19 @@ class FCOHomiesBot(commands.Bot):
         self.lfm_role_id = 1391787410182111456
         self.squadhelp_role_id = 1391671605826031626
         self.drhelp_role_id = 1446014580081037314
-        self.synced = True  # Assume synced, use /sync manually if needed
+        self.synced = False
 
     async def setup_hook(self):
-        # NEVER auto-sync or fetch commands on startup
-        # This triggers rate limits every time Render restarts
-        print("🔄 Bot setup complete - skipping all API calls to avoid rate limits")
-        # self.synced is already True - use /sync manually if you add new commands
+        # Sync commands once for new bot
+        print("🔄 Syncing commands...")
+        try:
+            await asyncio.sleep(3)
+            synced = await self.tree.sync()
+            print(f"✅ {len(synced)} commands synced!")
+            self.synced = True
+        except Exception as e:
+            print(f"❌ Sync failed: {e}")
+            self.synced = False
 
 bot = FCOHomiesBot()
 
@@ -433,10 +439,7 @@ async def on_ready():
     bot.loop.create_task(self_ping())
     bot.loop.create_task(memory_cleanup())
     
-    # Skip fetching commands to avoid rate limits
-    print("📝 Skipping command fetch to avoid rate limits")
-    
-    # Set presence with retry logic
+    # Set presence
     try:
         await bot.change_presence(activity=discord.Activity(
             type=discord.ActivityType.playing, 
@@ -454,7 +457,6 @@ async def self_ping():
     RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://your-bot-name.onrender.com")
     consecutive_failures = 0
     
-    # Wait before first ping to avoid startup API spam
     await asyncio.sleep(60)
     
     while not bot.is_closed():
@@ -480,14 +482,14 @@ async def self_ping():
             consecutive_failures = 0
             gc.collect()
         
-        await asyncio.sleep(840)  # Ping every 14 minutes
+        await asyncio.sleep(840)
 
 async def memory_cleanup():
     """Periodically clean up memory to prevent leaks"""
     await bot.wait_until_ready()
     
     while not bot.is_closed():
-        await asyncio.sleep(3600)  # Run every hour
+        await asyncio.sleep(3600)
         try:
             gc.collect()
             print(f"🧹 Memory cleanup performed at {datetime.now().strftime('%H:%M:%S')}")
@@ -1613,7 +1615,6 @@ if __name__ == "__main__":
     print("🔄 Self-ping system: ACTIVE (every 14 minutes)")
     print("🧹 Memory cleanup: ACTIVE (every hour)")
     print("🏥 Health monitoring: ACTIVE")
-    print("⚠️  NEVER auto-syncs - use /sync manually if needed")
     print("=" * 50)
     
     # Wait before connecting to avoid rate limits from previous deploy
@@ -1629,7 +1630,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Run the bot with auto-reconnect (no log_handler to reduce API calls)
+    # Run the bot with auto-reconnect
     try:
         bot.run(token, reconnect=True)
     except discord.LoginFailure:
