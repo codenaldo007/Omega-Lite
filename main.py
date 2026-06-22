@@ -18,7 +18,7 @@ import aiohttp
 import gc
 from contextlib import contextmanager
 
-# ========== FLASK SERVER (Start FIRST) ==========
+# ========== FLASK SERVER ==========
 app = Flask('')
 
 @app.route('/')
@@ -34,7 +34,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# ========== DATABASE SETUP ==========
+# ========== DATABASE ==========
 @contextmanager
 def db_connection(db_name, timeout=10):
     conn = None
@@ -55,7 +55,7 @@ def init_announcements_db():
                  channel_id TEXT, announce_time TEXT, created_by TEXT,
                  created_by_name TEXT, created_at TEXT, status TEXT)''')
             conn.commit()
-    except Exception as e: print(f"❌ DB init error: {e}")
+    except Exception as e: print(f"❌ DB error: {e}")
 
 def init_lfm_db():
     try:
@@ -68,14 +68,14 @@ def init_lfm_db():
                 c.execute(f"INSERT OR IGNORE INTO {table} VALUES (1, ?, ?, ?)",
                           (datetime.now().isoformat(), "0", "None"))
             conn.commit()
-    except Exception as e: print(f"❌ LFM DB init error: {e}")
+    except Exception as e: print(f"❌ LFM DB error: {e}")
 
 print("📁 Initializing databases...")
 init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
-# ========== COOLDOWN HELPERS ==========
+# ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
     try:
         with db_connection('lfm.db') as conn:
@@ -215,37 +215,39 @@ class FCOHomiesBot(commands.Bot):
         self.drhelp_role_id = 1446014580081037314
 
     async def setup_hook(self):
-        # Only sync if no commands exist (first run), skip on restarts
-        try:
-            existing = await self.tree.fetch_commands()
-            if not existing:
-                print("🔄 No commands found - performing initial sync...")
-                await self.tree.sync()
-                print("✅ Commands synced!")
-            else:
-                print(f"✅ {len(existing)} commands already registered - skipping sync")
-        except Exception as e:
-            print(f"⚠️ Could not check commands: {e}")
-            # If we can't check, try syncing anyway (might be first run with rate limit)
-            if "429" not in str(e):
-                try:
+        # Try to sync with retry for shared rate limits
+        for attempt in range(3):
+            try:
+                existing = await self.tree.fetch_commands()
+                if not existing:
+                    print(f"🔄 Syncing (attempt {attempt+1})...")
                     await self.tree.sync()
-                    print("✅ Commands synced (fallback)!")
-                except: pass
+                    print("✅ Synced!")
+                else:
+                    print(f"✅ {len(existing)} commands already registered")
+                return
+            except Exception as e:
+                if "429" in str(e):
+                    wait = (attempt + 1) * 30
+                    print(f"⚠️ Rate limited (shared). Waiting {wait}s...")
+                    await asyncio.sleep(wait)
+                else:
+                    print(f"⚠️ Error: {e}")
+                    return
+        print("⚠️ Use /sync manually later")
 
 bot = FCOHomiesBot()
 
-# ========== BOT EVENTS ==========
+# ========== EVENTS ==========
 @bot.event
 async def on_ready():
     print(f'⚡ Ω LITE is now operational!')
     print(f'📊 Connected to {len(bot.guilds)} servers')
-    print(f'🔧 User: {bot.user}')
     bot.loop.create_task(check_announcements())
     bot.loop.create_task(self_ping())
     bot.loop.create_task(memory_cleanup())
 
-# ========== BACKGROUND TASKS ==========
+# ========== BACKGROUND ==========
 async def self_ping():
     await bot.wait_until_ready()
     RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://omega-lite.onrender.com")
@@ -255,7 +257,7 @@ async def self_ping():
             async with aiohttp.ClientSession() as session:
                 async with session.get(RENDER_URL) as resp:
                     if resp.status == 200: print(f"🔄 Ping OK at {datetime.now().strftime('%H:%M:%S')}")
-        except Exception as e: print(f"⚠️ Ping failed: {e}")
+        except: pass
         await asyncio.sleep(840)
 
 async def memory_cleanup():
@@ -263,7 +265,6 @@ async def memory_cleanup():
     while not bot.is_closed():
         await asyncio.sleep(3600)
         gc.collect()
-        print(f"🧹 Memory cleanup at {datetime.now().strftime('%H:%M:%S')}")
 
 async def check_announcements():
     await bot.wait_until_ready()
@@ -282,14 +283,14 @@ async def check_announcements():
                             update_announcement_status(a[0], "sent")
                         else: update_announcement_status(a[0], "failed")
                     else: update_announcement_status(a[0], "failed")
-                except Exception as e: print(f"❌ Announcement {a[0]}: {e}")
+                except: pass
             await asyncio.sleep(30)
-        except Exception as e: print(f"❌ Checker error: {e}"); await asyncio.sleep(60)
+        except: await asyncio.sleep(60)
 
 # ========== COMMANDS ==========
 
-@bot.tree.command(name="announce", description="Schedule an announcement with role ping")
-@app_commands.describe(title="Title", description="What to announce", role="Role to ping", timestamp="Unix timestamp or <t:...>")
+@bot.tree.command(name="announce", description="Schedule an announcement")
+@app_commands.describe(title="Title", description="Content", role="Role to ping", timestamp="Unix timestamp or <t:...>")
 async def schedule_announcement(interaction: discord.Interaction, title: str, description: str, role: discord.Role, timestamp: str):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
@@ -303,25 +304,24 @@ async def schedule_announcement(interaction: discord.Interaction, title: str, de
         embed = discord.Embed(title="✅ Scheduled!", description=f"**{title}**\n{description}\n\n⏰ <t:{ts}:F>\n🆔 `{aid}`", color=0x10B981)
         embed.set_footer(text="Ω Lite | /announce_list to view")
         await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e: health_checker.error_count += 1; await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+    except Exception as e: health_checker.error_count += 1; await interaction.followup.send(f"❌ {e}", ephemeral=True)
 
-@bot.tree.command(name="announce_list", description="View your scheduled announcements")
+@bot.tree.command(name="announce_list", description="View your announcements")
 async def list_announcements(interaction: discord.Interaction):
     health_checker.command_count += 1
-    announcements = get_user_announcements(str(interaction.user.id))
-    if not announcements: await interaction.response.send_message("📭 No announcements!", ephemeral=True); return
+    a_list = get_user_announcements(str(interaction.user.id))
+    if not a_list: await interaction.response.send_message("📭 None!", ephemeral=True); return
     embed = discord.Embed(title="📋 Your Announcements", color=0x8B5CF6)
-    for a in announcements[:10]:
+    for a in a_list[:10]:
         ts = int(datetime.fromisoformat(a[5]).timestamp())
         embed.add_field(name=f"`{a[0]}` - {a[1]}", value=f"Status: {a[9]} | <t:{ts}:R>", inline=False)
-    embed.set_footer(text="Ω Lite | /announce_cancel <id>")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="announce_cancel", description="Cancel an announcement")
 @app_commands.describe(announcement_id="ID to cancel")
 async def cancel_announcement_command(interaction: discord.Interaction, announcement_id: str):
     health_checker.command_count += 1
-    if cancel_announcement(announcement_id, str(interaction.user.id)): await interaction.response.send_message(f"✅ Cancelled `{announcement_id}`!", ephemeral=True)
+    if cancel_announcement(announcement_id, str(interaction.user.id)): await interaction.response.send_message(f"✅ Cancelled!", ephemeral=True)
     else: await interaction.response.send_message("❌ Not found!", ephemeral=True)
 
 @bot.tree.command(name="lfm", description="Looking for match (5-min cooldown)")
@@ -329,23 +329,21 @@ async def lfm_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     try:
-        on_cd, rem, uid, uname = check_lfm_global_cooldown()
-        if on_cd: await interaction.followup.send(f"⏳ Cooldown: {int(rem)}s left. Last by <@{uid}>", ephemeral=True); return
+        on_cd, rem, uid, _ = check_lfm_global_cooldown()
+        if on_cd: await interaction.followup.send(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True); return
         role = interaction.guild.get_role(bot.lfm_role_id)
         if not role: await interaction.followup.send("❌ Role not found!", ephemeral=True); return
-        embed = discord.Embed(title="🎮 Looking for Match", description=f"{interaction.user.mention} is looking for a match!", color=0x10B981, timestamp=datetime.now())
-        embed.set_footer(text="Ω Lite | 5-min cooldown")
+        embed = discord.Embed(title="🎮 Looking for Match", description=f"{interaction.user.mention} is looking for a match!", color=0x10B981)
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
         update_lfm_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted! 5-min cooldown.", ephemeral=True)
+        await interaction.followup.send("✅ Posted!", ephemeral=True)
     except Exception as e: health_checker.error_count += 1; await interaction.followup.send(f"❌ {e}", ephemeral=True)
 
 @bot.tree.command(name="lfm_status", description="Check LFM cooldown")
 async def lfm_status_check(interaction: discord.Interaction):
-    health_checker.command_count += 1
     on_cd, rem, uid, _ = check_lfm_global_cooldown()
-    if on_cd: await interaction.response.send_message(f"⏳ LFM cooldown: {int(rem)}s left. Last by <@{uid}>", ephemeral=True)
-    else: await interaction.response.send_message("✅ LFM is ready!", ephemeral=True)
+    if on_cd: await interaction.response.send_message(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True)
+    else: await interaction.response.send_message("✅ Ready!", ephemeral=True)
 
 @bot.tree.command(name="squadhelp", description="Request squad help (15-min cooldown)")
 async def squadhelp_command(interaction: discord.Interaction):
@@ -353,34 +351,31 @@ async def squadhelp_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         on_cd, rem, uid, _ = check_squadhelp_global_cooldown()
-        if on_cd: await interaction.followup.send(f"⏳ Cooldown: {int(rem//60)}m left. Last by <@{uid}>", ephemeral=True); return
+        if on_cd: await interaction.followup.send(f"⏳ {int(rem//60)}m left. Last: <@{uid}>", ephemeral=True); return
         role = interaction.guild.get_role(bot.squadhelp_role_id)
         if not role: await interaction.followup.send("❌ Role not found!", ephemeral=True); return
-        embed = discord.Embed(title="🛡️ Squad Help", description=f"{interaction.user.mention} needs squad help!", color=0x3B82F6, timestamp=datetime.now())
-        embed.set_footer(text="Ω Lite | 15-min cooldown")
+        embed = discord.Embed(title="🛡️ Squad Help", description=f"{interaction.user.mention} needs squad help!", color=0x3B82F6)
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
         update_squadhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted! 15-min cooldown.", ephemeral=True)
+        await interaction.followup.send("✅ Posted!", ephemeral=True)
     except Exception as e: health_checker.error_count += 1; await interaction.followup.send(f"❌ {e}", ephemeral=True)
 
 @bot.tree.command(name="squadhelp_status", description="Check SquadHelp cooldown")
 async def squadhelp_status_check(interaction: discord.Interaction):
-    health_checker.command_count += 1
     on_cd, rem, uid, _ = check_squadhelp_global_cooldown()
-    if on_cd: await interaction.response.send_message(f"⏳ SquadHelp cooldown: {int(rem//60)}m left. Last by <@{uid}>", ephemeral=True)
-    else: await interaction.response.send_message("✅ SquadHelp is ready!", ephemeral=True)
+    if on_cd: await interaction.response.send_message(f"⏳ {int(rem//60)}m left. Last: <@{uid}>", ephemeral=True)
+    else: await interaction.response.send_message("✅ Ready!", ephemeral=True)
 
-@bot.tree.command(name="drhelp", description="Request Division Rivals help (5-min cooldown)")
+@bot.tree.command(name="drhelp", description="Request DR help (5-min cooldown)")
 async def drhelp_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
     try:
         on_cd, rem, uid, _ = check_drhelp_global_cooldown()
-        if on_cd: await interaction.followup.send(f"⏳ Cooldown: {int(rem)}s left. Last by <@{uid}>", ephemeral=True); return
+        if on_cd: await interaction.followup.send(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True); return
         role = interaction.guild.get_role(bot.drhelp_role_id)
         if not role: await interaction.followup.send("❌ Role not found!", ephemeral=True); return
-        embed = discord.Embed(title="⚔️ DR Help", description=f"{interaction.user.mention} needs DR help!", color=0xEF4444, timestamp=datetime.now())
-        embed.set_footer(text="Ω Lite | 5-min cooldown")
+        embed = discord.Embed(title="⚔️ DR Help", description=f"{interaction.user.mention} needs DR help!", color=0xEF4444)
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
         update_drhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
         await interaction.followup.send("✅ Posted!", ephemeral=True)
@@ -388,29 +383,26 @@ async def drhelp_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="drhelp_status", description="Check DRHelp cooldown")
 async def drhelp_status_check(interaction: discord.Interaction):
-    health_checker.command_count += 1
     on_cd, rem, uid, _ = check_drhelp_global_cooldown()
-    if on_cd: await interaction.response.send_message(f"⏳ DRHelp cooldown: {int(rem)}s left. Last by <@{uid}>", ephemeral=True)
-    else: await interaction.response.send_message("✅ DRHelp is ready!", ephemeral=True)
+    if on_cd: await interaction.response.send_message(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True)
+    else: await interaction.response.send_message("✅ Ready!", ephemeral=True)
 
 @bot.tree.command(name="ovr", description="Calculate team OVR")
-@app_commands.describe(count="Players (min 11)", base_ovr_values="Base OVRs separated by +", rankup_values="Rankups separated by +", total_max_badges="Max badges (optional)")
+@app_commands.describe(count="Players (min 11)", base_ovr_values="Base OVRs (e.g., 100+99+98...)", rankup_values="Rankups (e.g., 5+4+3...)", total_max_badges="Max badges")
 async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values: str, rankup_values: str, total_max_badges: int = 0):
     health_checker.command_count += 1
     await interaction.response.defer()
     try:
         bl = [int(x.strip()) for x in base_ovr_values.split('+')]
         rl = [int(x.strip()) for x in rankup_values.split('+')]
-        if count < 11 or len(bl) != count or len(rl) != count: await interaction.followup.send(f"❌ Need {count} values each!", ephemeral=True); return
+        if count < 11 or len(bl) != count or len(rl) != count: await interaction.followup.send(f"❌ Need {count} values!", ephemeral=True); return
         cb = 1 + (sum(bl) - 1) // count
         cr = 1 + (sum(rl) - 1) // count
-        total = cb + cr + total_max_badges
         embed = discord.Embed(title="⚡ OVR Analysis", color=0x1E40AF)
         embed.add_field(name="👥 Players", value=count, inline=True)
         embed.add_field(name="⭐ Base", value=cb, inline=True)
         embed.add_field(name="⬆️ Ranks", value=cr, inline=True)
-        embed.add_field(name="🎯 Total", value=total, inline=False)
-        embed.set_footer(text="Ω Lite")
+        embed.add_field(name="🎯 Total", value=cb + cr + total_max_badges, inline=False)
         await interaction.followup.send(embed=embed)
     except: await interaction.followup.send("❌ Invalid numbers!", ephemeral=True)
 
@@ -427,7 +419,6 @@ async def invest_calc(interaction: discord.Interaction, buy_price: float, buy_qu
     embed.add_field(name="Investment", value=f"{inv:,.0f}", inline=True)
     embed.add_field(name="Tax (10%)", value=f"{tax:,.0f}", inline=True)
     embed.add_field(name="Profit", value=f"{profit:,.0f}", inline=True)
-    embed.set_footer(text="Ω Lite")
     await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="timezone", description="Convert timezone")
@@ -442,7 +433,7 @@ async def timezone_convert(interaction: discord.Interaction, utc_time: str, time
         if not tz: await interaction.followup.send(f"❌ Unknown: {timezone}", ephemeral=True); return
         cv = utc_obj.astimezone(tz)
         await interaction.followup.send(f"🌐 UTC: {utc_obj.strftime('%Y-%m-%d %H:%M:%S')}\n📍 {timezone.upper()}: {cv.strftime('%Y-%m-%d %H:%M:%S')}")
-    except: await interaction.followup.send("❌ Use format: YYYY-MM-DD HH:MM:SS", ephemeral=True)
+    except: await interaction.followup.send("❌ Format: YYYY-MM-DD HH:MM:SS", ephemeral=True)
 
 @bot.tree.command(name="datetotimestamp", description="Date to Unix timestamp")
 @app_commands.describe(date="YYYY-MM-DD", time="HH:MM:SS", timezone="e.g., UTC, IST")
@@ -493,27 +484,26 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
 
 @bot.tree.command(name="ping", description="Check latency")
 async def ping(interaction: discord.Interaction):
-    health_checker.command_count += 1
     await interaction.response.send_message(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
 @bot.tree.command(name="health", description="Bot health (Admin)")
 async def health_check_command(interaction: discord.Interaction):
     if interaction.user.id not in [1214456066687893506, 553418145063239684]: await interaction.response.send_message("❌ Not authorized!", ephemeral=True); return
     h = health_checker.check_health()
-    await interaction.response.send_message(f"⏱️ Uptime: {h['uptime']}\n📊 Commands: {h['commands']}\n❌ Errors: {h['errors']}\n🔌 Latency: {round(bot.latency*1000)}ms", ephemeral=True)
+    await interaction.response.send_message(f"⏱️ {h['uptime']}\n📊 Cmds: {h['commands']}\n❌ Errs: {h['errors']}\n🔌 {round(bot.latency*1000)}ms", ephemeral=True)
 
-@bot.tree.command(name="sync", description="Sync commands (Owner only - use sparingly!)")
+@bot.tree.command(name="sync", description="Sync commands (Owner only)")
 async def sync_commands(interaction: discord.Interaction):
     if interaction.user.id != 1214456066687893506: await interaction.response.send_message("❌ Owner only!", ephemeral=True); return
     await interaction.response.defer(ephemeral=True)
     try:
         synced = await bot.tree.sync()
         await interaction.followup.send(f"✅ Synced {len(synced)} commands!", ephemeral=True)
-    except Exception as e: await interaction.followup.send(f"❌ Failed: {e}", ephemeral=True)
+    except Exception as e: await interaction.followup.send(f"❌ {e}", ephemeral=True)
 
 @bot.tree.command(name="timezones", description="List timezones")
 async def timezone_help(interaction: discord.Interaction):
-    await interaction.response.send_message("🌍 **Timezones:** EST, CST, MST, PST, GMT, UTC, CET, IST, JST, KST, HKT, SGT, AEST, NZST, MSK, GST, PKT, BDT")
+    await interaction.response.send_message("🌍 EST, CST, MST, PST, GMT, UTC, CET, IST, JST, KST, HKT, SGT, AEST, NZST, MSK, GST, PKT, BDT")
 
 @bot.tree.command(name="backup", description="Download backup (Admin)")
 async def backup_command(interaction: discord.Interaction):
@@ -530,33 +520,29 @@ async def restore_command(interaction: discord.Interaction, file: discord.Attach
     try:
         data = await file.read()
         with open(file.filename, 'wb') as f: f.write(data)
-        await interaction.followup.send(f"✅ Restored {file.filename}!", ephemeral=True)
-    except Exception as e: await interaction.followup.send(f"❌ Failed: {e}", ephemeral=True)
+        await interaction.followup.send(f"✅ Restored!", ephemeral=True)
+    except: await interaction.followup.send("❌ Failed!", ephemeral=True)
 
 @bot.tree.command(name="help", description="Show all commands")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(title="⚡ Ω Lite - Help", description="**FC Mobile Discord Bot**", color=0x8B5CF6)
-    embed.add_field(name="🎮 Game Tools", value="`/ovr` `/invest` `/formations`", inline=False)
-    embed.add_field(name="🌍 Time Tools", value="`/timezone` `/datetotimestamp` `/timezones`", inline=False)
+    embed.add_field(name="🎮 Game", value="`/ovr` `/invest` `/formations`", inline=False)
+    embed.add_field(name="🌍 Time", value="`/timezone` `/datetotimestamp` `/timezones`", inline=False)
     embed.add_field(name="🎁 Rewards", value="`/redeem`", inline=False)
-    embed.add_field(name="🎮 Ping Roles", value="`/lfm` `/squadhelp` `/drhelp`", inline=False)
-    embed.add_field(name="📢 Announcements", value="`/announce` `/announce_list` `/announce_cancel`", inline=False)
+    embed.add_field(name="🎮 Pings", value="`/lfm` `/squadhelp` `/drhelp`", inline=False)
+    embed.add_field(name="📢 Announce", value="`/announce` `/announce_list` `/announce_cancel`", inline=False)
     embed.add_field(name="💾 Backup", value="`/backup` `/restore`", inline=False)
-    embed.add_field(name="🔧 Utilities", value="`/ping` `/health` `/sync` `/help`", inline=False)
-    embed.set_footer(text="Ω Lite | /sync to register commands")
+    embed.add_field(name="🔧 Utils", value="`/ping` `/health` `/sync` `/help`", inline=False)
     await interaction.response.send_message(embed=embed)
 
-# ========== START BOT ==========
+# ========== START ==========
 if __name__ == "__main__":
-    # Start Flask in a thread FIRST (like the working bot)
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
     token = os.getenv('BOT_TOKEN')
-    if not token:
-        print("❌ BOT_TOKEN not set!")
-        sys.exit(1)
+    if not token: print("❌ BOT_TOKEN not set!"); sys.exit(1)
     
     print("=" * 50)
     print("🚀 Starting Ω Lite Bot...")
@@ -568,8 +554,6 @@ if __name__ == "__main__":
     try:
         bot.run(token, reconnect=True)
     except discord.LoginFailure:
-        print("❌ Invalid token!")
-        sys.exit(1)
+        print("❌ Invalid token!"); sys.exit(1)
     except Exception as e:
-        print(f"❌ Crashed: {e}")
-        sys.exit(1)
+        print(f"❌ {e}"); sys.exit(1)
