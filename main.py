@@ -76,9 +76,12 @@ init_lfm_db()
 print("✅ Databases initialized")
 
 # ========== SNIPE STORAGE ==========
-SNIPE_IGNORE = [1214456066687893506]  # Your ID - never sniped
-deleted_messages = {}   # {channel_id: [msg1, msg2, ...]}
-edited_messages = {}    # {channel_id: [msg1, msg2, ...]}
+SNIPE_IGNORE = [1214456066687893506]
+deleted_messages = {}
+edited_messages = {}
+
+# ========== AFK STORAGE ==========
+afk_users = {}
 
 # ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
@@ -275,8 +278,6 @@ class FCOHomiesBot(commands.Bot):
         self.drhelp_role_id = 1446014580081037314
 
     async def setup_hook(self):
-        # DO ABSOLUTELY NOTHING - no API calls at all
-        # Use /sync command manually ONE TIME after bot is online
         print("🔄 Bot ready - use /sync to register commands")
 
 bot = FCOHomiesBot()
@@ -322,6 +323,39 @@ async def on_message_edit(before, after):
     if len(edited_messages[before.channel.id]) > 50:
         edited_messages[before.channel.id] = edited_messages[before.channel.id][:50]
 
+# ========== AFK EVENTS ==========
+@bot.event
+async def on_message(message):
+    if message.author.bot: return
+    
+    # Check for AFK mentions
+    for mention in message.mentions:
+        if mention.id in afk_users:
+            afk_data = afk_users[mention.id]
+            time_diff = (datetime.now() - afk_data["time"]).seconds
+            if time_diff < 60: time_text = f"{time_diff}s ago"
+            elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
+            else: time_text = f"{time_diff // 3600}h ago"
+            
+            embed = discord.Embed(
+                description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}",
+                color=0xF59E0B
+            )
+            await message.reply(embed=embed, delete_after=10)
+            break
+    
+    # Remove AFK if user sends a message
+    if message.author.id in afk_users:
+        del afk_users[message.author.id]
+        embed = discord.Embed(
+            description=f"👋 Welcome back **{message.author.display_name}**! Removed your AFK.",
+            color=0x10B981
+        )
+        await message.reply(embed=embed, delete_after=5)
+    
+    # Process commands (important for prefix commands like !sync)
+    await bot.process_commands(message)
+
 # ========== EVENTS ==========
 @bot.event
 async def on_ready():
@@ -349,7 +383,6 @@ async def memory_cleanup():
     while not bot.is_closed():
         await asyncio.sleep(3600)
         gc.collect()
-        # Clean old snipes (older than 6 hours)
         cutoff = datetime.now() - timedelta(hours=6)
         for ch_id in list(deleted_messages.keys()):
             deleted_messages[ch_id] = [m for m in deleted_messages[ch_id] if m["time"] > cutoff]
@@ -576,20 +609,17 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
 
 # ========== SNIPE COMMANDS ==========
 @bot.tree.command(name="snipe", description="🔫 Show deleted messages (paginated, stores up to 50)")
-@app_commands.describe(page="Which deleted message (1=latest, 2=second latest, etc.)")
+@app_commands.describe(page="Which deleted message (1=latest)")
 async def snipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
     await interaction.response.defer()
     
     if interaction.channel.id not in deleted_messages or not deleted_messages[interaction.channel.id]:
-        await interaction.followup.send("🔫 Nothing to snipe!", ephemeral=True)
-        return
+        await interaction.followup.send("🔫 Nothing to snipe!", ephemeral=True); return
     
     messages = deleted_messages[interaction.channel.id]
-    
     if page < 1 or page > len(messages):
-        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True)
-        return
+        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True); return
     
     if len(messages) == 1:
         msg = messages[0]
@@ -604,8 +634,7 @@ async def snipe(interaction: discord.Interaction, page: int = 1):
         if msg.get("attachments"):
             embed.add_field(name="📎 Attachments", value="\n".join(msg["attachments"][:3])[:1024], inline=False)
             if msg["attachments"]: embed.set_image(url=msg["attachments"][0])
-        await interaction.followup.send(embed=embed)
-        return
+        await interaction.followup.send(embed=embed); return
     
     view = SnipePagination(messages, is_edit=False)
     view.current_page = page - 1
@@ -613,20 +642,17 @@ async def snipe(interaction: discord.Interaction, page: int = 1):
     await interaction.followup.send(embed=view.get_embed(), view=view)
 
 @bot.tree.command(name="editsnipe", description="✏️ Show edited messages (paginated, stores up to 50)")
-@app_commands.describe(page="Which edited message (1=latest, 2=second latest, etc.)")
+@app_commands.describe(page="Which edited message (1=latest)")
 async def editsnipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
     await interaction.response.defer()
     
     if interaction.channel.id not in edited_messages or not edited_messages[interaction.channel.id]:
-        await interaction.followup.send("✏️ Nothing to editsnipe!", ephemeral=True)
-        return
+        await interaction.followup.send("✏️ Nothing to editsnipe!", ephemeral=True); return
     
     messages = edited_messages[interaction.channel.id]
-    
     if page < 1 or page > len(messages):
-        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True)
-        return
+        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True); return
     
     if len(messages) == 1:
         msg = messages[0]
@@ -640,8 +666,7 @@ async def editsnipe(interaction: discord.Interaction, page: int = 1):
         embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
         embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
         embed.set_footer(text=f"Edited {time_text}")
-        await interaction.followup.send(embed=embed)
-        return
+        await interaction.followup.send(embed=embed); return
     
     view = SnipePagination(messages, is_edit=True)
     view.current_page = page - 1
@@ -652,21 +677,50 @@ async def editsnipe(interaction: discord.Interaction, page: int = 1):
 @app_commands.default_permissions(manage_messages=True)
 async def snipe_clear(interaction: discord.Interaction):
     health_checker.command_count += 1
-    
     if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ Need Manage Messages permission!", ephemeral=True)
-        return
+        await interaction.response.send_message("❌ Need Manage Messages permission!", ephemeral=True); return
     
     cleared = 0
-    if interaction.channel.id in deleted_messages:
-        del deleted_messages[interaction.channel.id]
-        cleared += 1
-    if interaction.channel.id in edited_messages:
-        del edited_messages[interaction.channel.id]
-        cleared += 1
+    if interaction.channel.id in deleted_messages: del deleted_messages[interaction.channel.id]; cleared += 1
+    if interaction.channel.id in edited_messages: del edited_messages[interaction.channel.id]; cleared += 1
     
     if cleared: await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s)!", ephemeral=True)
     else: await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
+
+# ========== AFK COMMANDS ==========
+@bot.tree.command(name="afk", description="💤 Set yourself as AFK")
+@app_commands.describe(reason="Reason for being AFK (optional)")
+async def afk(interaction: discord.Interaction, reason: str = "No reason provided"):
+    health_checker.command_count += 1
+    
+    afk_users[interaction.user.id] = {
+        "reason": reason,
+        "time": datetime.now(),
+        "name": interaction.user.display_name
+    }
+    
+    embed = discord.Embed(
+        description=f"💤 **{interaction.user.display_name}** is now AFK: {reason}",
+        color=0xF59E0B
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="afk_list", description="📋 Show all AFK users")
+async def afk_list(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    
+    if not afk_users:
+        await interaction.response.send_message("✅ No one is AFK right now!", ephemeral=True); return
+    
+    embed = discord.Embed(title="💤 AFK Users", color=0xF59E0B)
+    for uid, data in afk_users.items():
+        time_diff = (datetime.now() - data["time"]).seconds
+        if time_diff < 60: time_text = f"{time_diff}s ago"
+        elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
+        else: time_text = f"{time_diff // 3600}h ago"
+        embed.add_field(name=data['name'], value=f"📝 {data['reason']}\n🕐 {time_text}", inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ========== UTILITY COMMANDS ==========
 @bot.tree.command(name="ping", description="Check latency")
@@ -719,6 +773,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🎮 Pings", value="`/lfm` `/squadhelp` `/drhelp`", inline=False)
     embed.add_field(name="📢 Announce", value="`/announce` `/announce_list` `/announce_cancel`", inline=False)
     embed.add_field(name="🔫 Snipe", value="`/snipe` `/editsnipe` `/snipe_clear`", inline=False)
+    embed.add_field(name="💤 AFK", value="`/afk` `/afk_list`", inline=False)
     embed.add_field(name="💾 Backup", value="`/backup` `/restore`", inline=False)
     embed.add_field(name="🔧 Utils", value="`/ping` `/health` `/sync` `/help`", inline=False)
     await interaction.response.send_message(embed=embed)
