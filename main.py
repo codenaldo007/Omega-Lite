@@ -75,6 +75,9 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
+# ========== ROLE ID FOR SNIPE/AFK ACCESS ==========
+SNIPE_AFK_ROLE_ID = 1391671055902572625
+
 # ========== SNIPE STORAGE ==========
 SNIPE_IGNORE = [1214456066687893506]
 deleted_messages = {}
@@ -111,6 +114,19 @@ def check_squadhelp_global_cooldown(): return _check_cooldown("squadhelp_global_
 def update_squadhelp_global_cooldown(uid, un): _update_cooldown("squadhelp_global_cooldown", uid, un)
 def check_drhelp_global_cooldown(): return _check_cooldown("drhelp_global_cooldown", 300)
 def update_drhelp_global_cooldown(uid, un): _update_cooldown("drhelp_global_cooldown", uid, un)
+
+def has_snipe_afk_role():
+    """Check if user has the snipe/afk access role"""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        role = interaction.guild.get_role(SNIPE_AFK_ROLE_ID)
+        if role and role in interaction.user.roles:
+            return True
+        # Also allow bot owner and admins
+        if interaction.user.id in [1214456066687893506, 553418145063239684]:
+            return True
+        await interaction.response.send_message("❌ You need the designated role to use this command!", ephemeral=True)
+        return False
+    return app_commands.check(predicate)
 
 # ========== HELPERS ==========
 def parse_timestamp(ts_str):
@@ -328,7 +344,6 @@ async def on_message_edit(before, after):
 async def on_message(message):
     if message.author.bot: return
     
-    # Check for AFK mentions
     for mention in message.mentions:
         if mention.id in afk_users:
             afk_data = afk_users[mention.id]
@@ -344,7 +359,6 @@ async def on_message(message):
             await message.reply(embed=embed, delete_after=10)
             break
     
-    # Remove AFK if user sends a message
     if message.author.id in afk_users:
         del afk_users[message.author.id]
         embed = discord.Embed(
@@ -353,7 +367,6 @@ async def on_message(message):
         )
         await message.reply(embed=embed, delete_after=5)
     
-    # Process commands (important for prefix commands like !sync)
     await bot.process_commands(message)
 
 # ========== EVENTS ==========
@@ -607,12 +620,13 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
     save_redeem_codes(bot.redeem_data)
     await interaction.followup.send(f"✅ Removed `{code.upper()}`!", ephemeral=True)
 
-# ========== SNIPE COMMANDS ==========
-@bot.tree.command(name="snipe", description="🔫 Show deleted messages (paginated, stores up to 50)")
+# ========== SNIPE COMMANDS (ROLE RESTRICTED) ==========
+@bot.tree.command(name="snipe", description="🔫 Show deleted messages (Role restricted)")
 @app_commands.describe(page="Which deleted message (1=latest)")
+@has_snipe_afk_role()
 async def snipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=False)
     
     if interaction.channel.id not in deleted_messages or not deleted_messages[interaction.channel.id]:
         await interaction.followup.send("🔫 Nothing to snipe!", ephemeral=True); return
@@ -641,11 +655,12 @@ async def snipe(interaction: discord.Interaction, page: int = 1):
     view.update_buttons()
     await interaction.followup.send(embed=view.get_embed(), view=view)
 
-@bot.tree.command(name="editsnipe", description="✏️ Show edited messages (paginated, stores up to 50)")
+@bot.tree.command(name="editsnipe", description="✏️ Show edited messages (Role restricted)")
 @app_commands.describe(page="Which edited message (1=latest)")
+@has_snipe_afk_role()
 async def editsnipe(interaction: discord.Interaction, page: int = 1):
     health_checker.command_count += 1
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=False)
     
     if interaction.channel.id not in edited_messages or not edited_messages[interaction.channel.id]:
         await interaction.followup.send("✏️ Nothing to editsnipe!", ephemeral=True); return
@@ -673,12 +688,10 @@ async def editsnipe(interaction: discord.Interaction, page: int = 1):
     view.update_buttons()
     await interaction.followup.send(embed=view.get_embed(), view=view)
 
-@bot.tree.command(name="snipe_clear", description="🧹 Clear snipe history (Manage Messages permission)")
-@app_commands.default_permissions(manage_messages=True)
+@bot.tree.command(name="snipe_clear", description="🧹 Clear snipe history (Role restricted)")
+@has_snipe_afk_role()
 async def snipe_clear(interaction: discord.Interaction):
     health_checker.command_count += 1
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ Need Manage Messages permission!", ephemeral=True); return
     
     cleared = 0
     if interaction.channel.id in deleted_messages: del deleted_messages[interaction.channel.id]; cleared += 1
@@ -687,9 +700,10 @@ async def snipe_clear(interaction: discord.Interaction):
     if cleared: await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s)!", ephemeral=True)
     else: await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
 
-# ========== AFK COMMANDS ==========
-@bot.tree.command(name="afk", description="💤 Set yourself as AFK")
+# ========== AFK COMMANDS (ROLE RESTRICTED) ==========
+@bot.tree.command(name="afk", description="💤 Set yourself as AFK (Role restricted)")
 @app_commands.describe(reason="Reason for being AFK (optional)")
+@has_snipe_afk_role()
 async def afk(interaction: discord.Interaction, reason: str = "No reason provided"):
     health_checker.command_count += 1
     
@@ -705,7 +719,8 @@ async def afk(interaction: discord.Interaction, reason: str = "No reason provide
     )
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="afk_list", description="📋 Show all AFK users")
+@bot.tree.command(name="afk_list", description="📋 Show all AFK users (Role restricted)")
+@has_snipe_afk_role()
 async def afk_list(interaction: discord.Interaction):
     health_checker.command_count += 1
     
@@ -772,8 +787,8 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🎁 Rewards", value="`/redeem`", inline=False)
     embed.add_field(name="🎮 Pings", value="`/lfm` `/squadhelp` `/drhelp`", inline=False)
     embed.add_field(name="📢 Announce", value="`/announce` `/announce_list` `/announce_cancel`", inline=False)
-    embed.add_field(name="🔫 Snipe", value="`/snipe` `/editsnipe` `/snipe_clear`", inline=False)
-    embed.add_field(name="💤 AFK", value="`/afk` `/afk_list`", inline=False)
+    embed.add_field(name="🔫 Snipe (Role)", value="`/snipe` `/editsnipe` `/snipe_clear`", inline=False)
+    embed.add_field(name="💤 AFK (Role)", value="`/afk` `/afk_list`", inline=False)
     embed.add_field(name="💾 Backup", value="`/backup` `/restore`", inline=False)
     embed.add_field(name="🔧 Utils", value="`/ping` `/health` `/sync` `/help`", inline=False)
     await interaction.response.send_message(embed=embed)
