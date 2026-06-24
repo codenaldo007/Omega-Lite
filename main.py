@@ -116,14 +116,10 @@ def check_drhelp_global_cooldown(): return _check_cooldown("drhelp_global_cooldo
 def update_drhelp_global_cooldown(uid, un): _update_cooldown("drhelp_global_cooldown", uid, un)
 
 def has_snipe_afk_role():
-    """Check if user has the snipe/afk access role"""
     async def predicate(interaction: discord.Interaction) -> bool:
         role = interaction.guild.get_role(SNIPE_AFK_ROLE_ID)
-        if role and role in interaction.user.roles:
-            return True
-        # Also allow bot owner and admins
-        if interaction.user.id in [1214456066687893506, 553418145063239684]:
-            return True
+        if role and role in interaction.user.roles: return True
+        if interaction.user.id in [1214456066687893506, 553418145063239684]: return True
         await interaction.response.send_message("❌ You need the designated role to use this command!", ephemeral=True)
         return False
     return app_commands.check(predicate)
@@ -344,6 +340,7 @@ async def on_message_edit(before, after):
 async def on_message(message):
     if message.author.bot: return
     
+    # Check for AFK mentions and store ping info
     for mention in message.mentions:
         if mention.id in afk_users:
             afk_data = afk_users[mention.id]
@@ -352,6 +349,22 @@ async def on_message(message):
             elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
             else: time_text = f"{time_diff // 3600}h ago"
             
+            # Store ping info for the AFK user
+            if "pings" not in afk_data:
+                afk_data["pings"] = []
+            
+            afk_data["pings"].append({
+                "author": str(message.author),
+                "author_mention": message.author.mention,
+                "content": message.content[:100],
+                "time": datetime.now(),
+                "jump_url": message.jump_url,
+                "channel": str(message.channel)
+            })
+            
+            if len(afk_data["pings"]) > 10:
+                afk_data["pings"] = afk_data["pings"][-10:]
+            
             embed = discord.Embed(
                 description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}",
                 color=0xF59E0B
@@ -359,13 +372,33 @@ async def on_message(message):
             await message.reply(embed=embed, delete_after=10)
             break
     
+    # Remove AFK if user sends a message and show pings
     if message.author.id in afk_users:
-        del afk_users[message.author.id]
+        afk_data = afk_users[message.author.id]
+        
         embed = discord.Embed(
             description=f"👋 Welcome back **{message.author.display_name}**! Removed your AFK.",
             color=0x10B981
         )
-        await message.reply(embed=embed, delete_after=5)
+        
+        if "pings" in afk_data and afk_data["pings"]:
+            ping_text = ""
+            for ping in afk_data["pings"][:5]:
+                ping_time_diff = (datetime.now() - ping["time"]).seconds
+                if ping_time_diff < 60: ping_time_text = f"{ping_time_diff}s ago"
+                elif ping_time_diff < 3600: ping_time_text = f"{ping_time_diff // 60}m ago"
+                else: ping_time_text = f"{ping_time_diff // 3600}h ago"
+                
+                ping_text += f"• **{ping['author']}** in {ping['channel']}: [Jump to message]({ping['jump_url']})\n  └ {ping_time_text}\n"
+            
+            embed.add_field(
+                name=f"📩 You were pinged {len(afk_data['pings'])} time(s):",
+                value=ping_text[:1024],
+                inline=False
+            )
+        
+        del afk_users[message.author.id]
+        await message.reply(embed=embed, delete_after=15)
     
     await bot.process_commands(message)
 
@@ -620,7 +653,7 @@ async def redeem_remove(interaction: discord.Interaction, code: str):
     save_redeem_codes(bot.redeem_data)
     await interaction.followup.send(f"✅ Removed `{code.upper()}`!", ephemeral=True)
 
-# ========== SNIPE COMMANDS (ROLE RESTRICTED) ==========
+# ========== SNIPE COMMANDS ==========
 @bot.tree.command(name="snipe", description="🔫 Show deleted messages (Role restricted)")
 @app_commands.describe(page="Which deleted message (1=latest)")
 @has_snipe_afk_role()
@@ -700,7 +733,7 @@ async def snipe_clear(interaction: discord.Interaction):
     if cleared: await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s)!", ephemeral=True)
     else: await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
 
-# ========== AFK COMMANDS (ROLE RESTRICTED) ==========
+# ========== AFK COMMANDS ==========
 @bot.tree.command(name="afk", description="💤 Set yourself as AFK (Role restricted)")
 @app_commands.describe(reason="Reason for being AFK (optional)")
 @has_snipe_afk_role()
@@ -710,7 +743,8 @@ async def afk(interaction: discord.Interaction, reason: str = "No reason provide
     afk_users[interaction.user.id] = {
         "reason": reason,
         "time": datetime.now(),
-        "name": interaction.user.display_name
+        "name": interaction.user.display_name,
+        "pings": []
     }
     
     embed = discord.Embed(
