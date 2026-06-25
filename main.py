@@ -1462,4 +1462,3 @@ if __name__ == "__main__":
         print("❌ Invalid token!"); sys.exit(1)
     except Exception as e:
         print(f"❌ {e}"); sys.exit(1)
-I want the list which shows the pings after one breaks AFK, not to vanish, but stay
