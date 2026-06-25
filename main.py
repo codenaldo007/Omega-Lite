@@ -395,7 +395,7 @@ async def on_message(message):
             )
         
         del afk_users[message.author.id]
-        await message.reply(embed=embed, delete_after=15)
+        await message.reply(embed=embed)
     
     await bot.process_commands(message)
 
@@ -1462,3 +1462,4 @@ if __name__ == "__main__":
         print("❌ Invalid token!"); sys.exit(1)
     except Exception as e:
         print(f"❌ {e}"); sys.exit(1)
+I want the list which shows the pings after one breaks AFK, not to vanish, but stay
