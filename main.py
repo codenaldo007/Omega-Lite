@@ -61,7 +61,7 @@ def init_lfm_db():
     try:
         with db_connection('lfm.db') as conn:
             c = conn.cursor()
-            for table in ["lfm_global_cooldown", "squadhelp_global_cooldown", "drhelp_global_cooldown"]:
+            for table in ["lfm_global_cooldown", "squadhelp_global_cooldown", "drhelp_global_cooldown", "eventping_global_cooldown"]:
                 c.execute(f'''CREATE TABLE IF NOT EXISTS {table}
                     (id INTEGER PRIMARY KEY CHECK (id = 1), last_used TIMESTAMP,
                      last_user_id TEXT, last_user_name TEXT)''')
@@ -114,6 +114,8 @@ def check_squadhelp_global_cooldown(): return _check_cooldown("squadhelp_global_
 def update_squadhelp_global_cooldown(uid, un): _update_cooldown("squadhelp_global_cooldown", uid, un)
 def check_drhelp_global_cooldown(): return _check_cooldown("drhelp_global_cooldown", 300)
 def update_drhelp_global_cooldown(uid, un): _update_cooldown("drhelp_global_cooldown", uid, un)
+def check_eventping_global_cooldown(): return _check_cooldown("eventping_global_cooldown", 900)
+def update_eventping_global_cooldown(uid, un): _update_cooldown("eventping_global_cooldown", uid, un)
 
 def has_snipe_afk_role():
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -287,7 +289,9 @@ class FCOHomiesBot(commands.Bot):
         self.redeem_data = load_redeem_codes()
         self.lfm_role_id = 1391787410182111456
         self.squadhelp_role_id = 1391671605826031626
+        self.squadhelp_role_id_2 = 1517837277005484152
         self.drhelp_role_id = 1446014580081037314
+        self.eventping_role_id = 1534545908853903511
 
     async def setup_hook(self):
         print("🔄 Bot ready - use /sync to register commands")
@@ -732,7 +736,7 @@ async def squadhelp_command(interaction: discord.Interaction):
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | SquadHelp System (15-min global cooldown)")
         
-        await interaction.channel.send(content=f"{squadhelp_role.mention}", embed=embed)
+        await interaction.channel.send(content=f"{squadhelp_role.mention} <@&{bot.squadhelp_role_id_2}>", embed=embed)
         update_squadhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
         
         confirm_embed = discord.Embed(
@@ -874,6 +878,101 @@ async def drhelp_status_check(interaction: discord.Interaction):
         )
     
     embed.set_footer(text="Ω Lite | DRHelp System (5-min cooldown)")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ========== EVENTPING COMMAND ==========
+
+@bot.tree.command(name="eventping", description="📢 Ping for events - Pings the Event role (15-min GLOBAL cooldown)")
+async def eventping_command(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        on_cooldown, remaining, last_user_id, last_user_name = check_eventping_global_cooldown()
+        
+        if on_cooldown:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+            
+            last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+                
+            embed = discord.Embed(
+                title="⏳ Global Cooldown Active",
+                description=f"EventPing is on global cooldown for another **{time_text}**",
+                color=0xF59E0B
+            )
+            embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
+            embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
+            embed.set_footer(text="Ω Lite | EventPing System (15-min cooldown)")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        eventping_role = interaction.guild.get_role(bot.eventping_role_id)
+        
+        if not eventping_role:
+            await interaction.followup.send("❌ EventPing role not found! Please contact an admin.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="📢 Event Alert!",
+            description=f"{interaction.user.mention} has an event announcement!",
+            color=0x8B5CF6,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Posted by", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
+        embed.add_field(name="💡 How to respond", value="React or reply to this message to join the event!", inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
+        embed.set_footer(text="Ω Lite | EventPing System (15-min global cooldown)")
+        
+        await interaction.channel.send(content=f"{eventping_role.mention}", embed=embed)
+        update_eventping_global_cooldown(str(interaction.user.id), interaction.user.name)
+        
+        confirm_embed = discord.Embed(
+            title="✅ EventPing Posted!",
+            description="Your event announcement has been posted!",
+            color=0x8B5CF6
+        )
+        confirm_embed.add_field(name="🌍 Global Cooldown", value="EventPing is now on cooldown for **15 minutes** for EVERYONE", inline=False)
+        confirm_embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(minutes=15)).timestamp())}:R>", inline=False)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+        
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="eventping_status", description="Check EventPing global cooldown status")
+async def eventping_status_check(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    on_cooldown, remaining, last_user_id, last_user_name = check_eventping_global_cooldown()
+    
+    if on_cooldown:
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+        
+        last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+            
+        embed = discord.Embed(
+            title="⏳ EventPing Global Cooldown",
+            description=f"EventPing is currently on **global cooldown**",
+            color=0xF59E0B
+        )
+        embed.add_field(name="Time remaining", value=time_text, inline=True)
+        embed.add_field(name="Ready at", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=True)
+        embed.add_field(name="Last used by", value=last_user_mention, inline=False)
+    else:
+        embed = discord.Embed(
+            title="✅ EventPing Ready",
+            description="EventPing is **available** right now! Use `/eventping` to ping the role.",
+            color=0x8B5CF6
+        )
+    
+    embed.set_footer(text="Ω Lite | EventPing System (15-min cooldown)")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== OVR COMMAND ==========
@@ -1429,7 +1528,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="🎮 **Game Tools**", value="`/ovr` - Calculate team OVR\n`/invest` - Investment calculator\n`/formations` - Best formations", inline=False)
     embed.add_field(name="🌍 **Time Tools**", value="`/timezone` - Convert timezones\n`/datetotimestamp` - Get Discord timestamps\n`/timezones` - List abbreviations", inline=False)
     embed.add_field(name="🎁 **Rewards**", value="`/redeem` - View FC Mobile codes", inline=False)
-    embed.add_field(name="🎮 **Ping Roles**", value="`/lfm` - Looking for match (5-min)\n`/squadhelp` - Squad help (15-min)\n`/drhelp` - DR help (5-min)", inline=False)
+    embed.add_field(name="🎮 **Ping Roles**", value="`/lfm` - Looking for match (5-min)\n`/squadhelp` - Squad help (15-min)\n`/drhelp` - DR help (5-min)\n`/eventping` - Event ping (15-min)", inline=False)
     embed.add_field(name="📢 **Announcements**", value="`/announce` - Schedule announcement\n`/announce_list` - View yours\n`/announce_cancel` - Cancel", inline=False)
     embed.add_field(name="🔫 **Snipe (Role)**", value="`/snipe` - Show deleted messages\n`/editsnipe` - Show edited messages\n`/snipe_clear` - Clear history", inline=False)
     embed.add_field(name="💤 **AFK (Role)**", value="`/afk` - Set yourself AFK\n`/afk_list` - View AFK users", inline=False)
