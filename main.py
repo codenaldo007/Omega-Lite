@@ -92,6 +92,9 @@ edited_messages = {}
 # ========== AFK STORAGE ==========
 afk_users = {}
 
+# ========== AUTO-MOD COOLDOWN ==========
+auto_mod_last_action = {}  # {channel_id: datetime}
+
 # ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
     try:
@@ -128,7 +131,7 @@ def has_snipe_afk_role():
         role = interaction.guild.get_role(SNIPE_AFK_ROLE_ID)
         if role and role in interaction.user.roles: return True
         if interaction.user.id in [1214456066687893506, 553418145063239684]: return True
-        await interaction.response.send_message("❌ You need the designated role to use this command!", ephemeral=True)
+        await interaction.response.send_message("❌ You need the designated role!", ephemeral=True)
         return False
     return app_commands.check(predicate)
 
@@ -248,11 +251,9 @@ class SnipePagination(discord.ui.View):
     def get_embed(self):
         msg = self.messages[self.current_page]
         time_diff = (datetime.now() - msg["time"]).seconds
-        
         if time_diff < 60: time_text = f"{time_diff}s ago"
         elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
         else: time_text = f"{time_diff // 3600}h ago"
-        
         total = len(self.messages)
         
         if self.is_edit:
@@ -268,7 +269,6 @@ class SnipePagination(discord.ui.View):
             if msg.get("attachments"):
                 embed.add_field(name="📎 Attachments", value="\n".join(msg["attachments"][:3])[:1024], inline=False)
                 if msg["attachments"]: embed.set_image(url=msg["attachments"][0])
-        
         return embed
     
     @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.gray)
@@ -309,10 +309,7 @@ bot = FCOHomiesBot()
 async def on_message_delete(message):
     if message.author.bot or message.author.id in SNIPE_IGNORE: return
     if not message.content and not message.attachments: return
-    
-    if message.channel.id not in deleted_messages:
-        deleted_messages[message.channel.id] = []
-    
+    if message.channel.id not in deleted_messages: deleted_messages[message.channel.id] = []
     msg_data = {
         "content": message.content or "*No text*",
         "author": str(message.author),
@@ -320,7 +317,6 @@ async def on_message_delete(message):
         "time": datetime.now(),
         "attachments": [att.url for att in message.attachments] if message.attachments else []
     }
-    
     deleted_messages[message.channel.id].insert(0, msg_data)
     if len(deleted_messages[message.channel.id]) > 50:
         deleted_messages[message.channel.id] = deleted_messages[message.channel.id][:50]
@@ -329,10 +325,7 @@ async def on_message_delete(message):
 async def on_message_edit(before, after):
     if before.author.bot or before.author.id in SNIPE_IGNORE: return
     if before.content == after.content: return
-    
-    if before.channel.id not in edited_messages:
-        edited_messages[before.channel.id] = []
-    
+    if before.channel.id not in edited_messages: edited_messages[before.channel.id] = []
     msg_data = {
         "before": before.content or "*No text*",
         "after": after.content or "*No text*",
@@ -340,7 +333,6 @@ async def on_message_edit(before, after):
         "author_avatar": before.author.display_avatar.url if before.author.display_avatar else None,
         "time": datetime.now()
     }
-    
     edited_messages[before.channel.id].insert(0, msg_data)
     if len(edited_messages[before.channel.id]) > 50:
         edited_messages[before.channel.id] = edited_messages[before.channel.id][:50]
@@ -352,44 +344,49 @@ async def on_message(message):
         await bot.process_commands(message)
         return
     
-    # ===== AUTO-MOD: Language detection =====
+    # ===== AUTO-MOD: Language detection with cooldown =====
     if message.guild and message.content and len(message.content.strip()) > 10:
         is_exempt = (message.channel.id in MULTILINGUAL_CHANNELS or 
                      message.author.guild_permissions.manage_messages or
                      message.author.id in [1214456066687893506, 553418145063239684])
         
         if not is_exempt:
-            # Quick pre-check: if mostly ASCII, skip detection
-            ascii_count = sum(1 for c in message.content if ord(c) < 128)
-            total_chars = len(message.content)
-            
-            # Only run langdetect if message has significant non-ASCII content
-            if ascii_count / total_chars < 0.85:
-                try:
-                    lang = detect(message.content)
-                    if lang != 'en':
-                        try:
-                            await message.delete()
-                            print(f"🗑️ Auto-Mod: Deleted {lang} msg from {message.author}: {message.content[:50]}")
-                        except Exception as e:
-                            print(f"⚠️ Auto-Mod delete error: {e}")
-                        
-                        try:
-                            channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
-                            embed = discord.Embed(
-                                title="⚠️ English Only Channel",
-                                description=f"{message.author.mention}, please use **English only** in this channel.\nUse {channels} for other languages.",
-                                color=0xDC2626
-                            )
-                            embed.set_footer(text="Ω Lite | Auto-Mod")
-                            await message.channel.send(embed=embed, delete_after=10)
-                        except:
-                            pass
-                        
-                        await bot.process_commands(message)
-                        return
-                except:
-                    pass  # Can't detect - let it go
+            # Check per-channel cooldown (1 second between deletions)
+            last = auto_mod_last_action.get(message.channel.id)
+            if last and (datetime.now() - last).total_seconds() < 1:
+                pass  # Too soon, skip
+            else:
+                ascii_count = sum(1 for c in message.content if ord(c) < 128)
+                total_chars = len(message.content)
+                
+                if ascii_count / total_chars < 0.85:
+                    try:
+                        lang = detect(message.content)
+                        if lang != 'en':
+                            print(f"🗑️ Auto-Mod: {lang} detected - deleting: {message.content[:50]}")
+                            auto_mod_last_action[message.channel.id] = datetime.now()
+                            
+                            try:
+                                await message.delete()
+                            except Exception as e:
+                                print(f"⚠️ Delete error: {e}")
+                            
+                            try:
+                                channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
+                                embed = discord.Embed(
+                                    title="⚠️ English Only Channel",
+                                    description=f"{message.author.mention}, please use **English only**.\nUse {channels} for other languages.",
+                                    color=0xDC2626
+                                )
+                                embed.set_footer(text="Ω Lite | Auto-Mod")
+                                await message.channel.send(embed=embed, delete_after=10)
+                            except:
+                                pass
+                            
+                            await bot.process_commands(message)
+                            return
+                    except:
+                        pass
     
     # ===== AFK mention detection =====
     for mention in message.mentions:
@@ -399,35 +396,23 @@ async def on_message(message):
             if time_diff < 60: time_text = f"{time_diff}s ago"
             elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
             else: time_text = f"{time_diff // 3600}h ago"
-            
             if "pings" not in afk_data: afk_data["pings"] = []
             afk_data["pings"].append({
-                "author": str(message.author), "author_mention": message.author.mention,
-                "content": message.content[:100], "time": datetime.now(),
-                "jump_url": message.jump_url, "channel": str(message.channel)
+                "author": str(message.author), "content": message.content[:100],
+                "time": datetime.now(), "jump_url": message.jump_url, "channel": str(message.channel)
             })
             if len(afk_data["pings"]) > 10: afk_data["pings"] = afk_data["pings"][-10:]
-            
-            embed = discord.Embed(
-                description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}",
-                color=0xF59E0B
-            )
+            embed = discord.Embed(description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}", color=0xF59E0B)
             await message.reply(embed=embed, delete_after=10)
             break
     
     # ===== AFK return detection =====
     if message.author.id in afk_users:
         afk_data = afk_users[message.author.id]
-        embed = discord.Embed(description=f"👋 Welcome back **{message.author.display_name}**! Removed your AFK.", color=0x10B981)
+        embed = discord.Embed(description=f"👋 Welcome back **{message.author.display_name}**!", color=0x10B981)
         if "pings" in afk_data and afk_data["pings"]:
-            ping_text = ""
-            for ping in afk_data["pings"][:5]:
-                ping_time_diff = (datetime.now() - ping["time"]).seconds
-                if ping_time_diff < 60: ping_time_text = f"{ping_time_diff}s ago"
-                elif ping_time_diff < 3600: ping_time_text = f"{ping_time_diff // 60}m ago"
-                else: ping_time_text = f"{ping_time_diff // 3600}h ago"
-                ping_text += f"• **{ping['author']}** in {ping['channel']}: [Jump to message]({ping['jump_url']})\n  └ {ping_time_text}\n"
-            embed.add_field(name=f"📩 You were pinged {len(afk_data['pings'])} time(s):", value=ping_text[:1024], inline=False)
+            ping_text = "\n".join([f"• **{p['author']}**: [Jump]({p['jump_url']})" for p in afk_data["pings"][:5]])
+            embed.add_field(name=f"📩 {len(afk_data['pings'])} ping(s)", value=ping_text[:1024], inline=False)
         del afk_users[message.author.id]
         await message.reply(embed=embed)
     
@@ -481,19 +466,17 @@ async def check_announcements():
                         if role:
                             embed = discord.Embed(title=f"📢 {a[1]}", description=a[2], color=0x8B5CF6, timestamp=datetime.now())
                             embed.add_field(name="Scheduled by", value=a[7], inline=True)
-                            embed.add_field(name="Announcement ID", value=f"`{a[0]}`", inline=True)
+                            embed.add_field(name="ID", value=f"`{a[0]}`", inline=True)
                             embed.set_footer(text="Ω Lite Announcement System")
                             await ch.send(content=f"{role.mention}", embed=embed)
                             update_announcement_status(a[0], "sent")
-                        else: update_announcement_status(a[0], "failed")
-                    else: update_announcement_status(a[0], "failed")
                 except: pass
             await asyncio.sleep(30)
         except: await asyncio.sleep(60)
 
 # ========== ANNOUNCEMENT COMMANDS ==========
 
-@bot.tree.command(name="announce", description="Schedule an announcement with role ping using timestamp")
+@bot.tree.command(name="announce", description="Schedule an announcement")
 @app_commands.describe(title="Title", description="Content", role="Role to ping", timestamp="Unix timestamp or <t:...>")
 async def schedule_announcement(interaction: discord.Interaction, title: str, description: str, role: discord.Role, timestamp: str):
     health_checker.command_count += 1
@@ -511,8 +494,8 @@ async def schedule_announcement(interaction: discord.Interaction, title: str, de
         if not aid:
             await interaction.followup.send("❌ Failed!", ephemeral=True)
             return
-        embed = discord.Embed(title="✅ Scheduled!", description=f"I'll announce this in {interaction.channel.mention}\n\n**{title}**\n{description}\n\n⏰ <t:{ts}:F>\n🆔 `{aid}`", color=0x10B981)
-        embed.set_footer(text="Ω Lite | /announce_list to view")
+        embed = discord.Embed(title="✅ Scheduled!", description=f"**{title}**\n{description}\n\n⏰ <t:{ts}:F>\n🆔 `{aid}`", color=0x10B981)
+        embed.set_footer(text="Ω Lite | /announce_list")
         await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as e:
         health_checker.error_count += 1
@@ -554,9 +537,6 @@ async def lfm_command(interaction: discord.Interaction):
             await interaction.followup.send("❌ Role not found!", ephemeral=True)
             return
         embed = discord.Embed(title="🎮 Looking for Match", description=f"{interaction.user.mention} is looking for a match!", color=0x10B981, timestamp=datetime.now())
-        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
-        embed.add_field(name="💡 Join", value="Ping the player!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | 5-min cooldown")
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
@@ -587,9 +567,6 @@ async def squadhelp_command(interaction: discord.Interaction):
             await interaction.followup.send("❌ Role not found!", ephemeral=True)
             return
         embed = discord.Embed(title="🛡️ Squad Help", description=f"{interaction.user.mention} needs squad help!", color=0x3B82F6, timestamp=datetime.now())
-        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
-        embed.add_field(name="💡 Help", value="Ping the player!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | 15-min cooldown")
         await interaction.channel.send(content=f"{role.mention} <@&{bot.squadhelp_role_id_2}>", embed=embed)
@@ -620,9 +597,6 @@ async def drhelp_command(interaction: discord.Interaction):
             await interaction.followup.send("❌ Role not found!", ephemeral=True)
             return
         embed = discord.Embed(title="⚔️ DR Help", description=f"{interaction.user.mention} needs DR help!", color=0xEF4444, timestamp=datetime.now())
-        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
-        embed.add_field(name="💡 Help", value="Ping the player!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | 5-min cooldown")
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
@@ -653,9 +627,6 @@ async def eventping_command(interaction: discord.Interaction):
             await interaction.followup.send("❌ Role not found!", ephemeral=True)
             return
         embed = discord.Embed(title="📢 Event Alert!", description=f"{interaction.user.mention} has an event!", color=0x8B5CF6, timestamp=datetime.now())
-        embed.add_field(name="Posted by", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
-        embed.add_field(name="💡 Respond", value="React or reply!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
         embed.set_footer(text="Ω Lite | 15-min cooldown")
         await interaction.channel.send(content=f"{role.mention}", embed=embed)
@@ -923,7 +894,7 @@ async def automod_set(interaction: discord.Interaction, channel: discord.TextCha
     MULTILINGUAL_CHANNELS.clear()
     MULTILINGUAL_CHANNELS.append(channel.id)
     embed = discord.Embed(title="✅ Auto-Mod Configured", description=f"**{channel.mention}** is now multilingual.\nAll other channels require English.", color=0x10B981)
-    embed.add_field(name="🔍 Detection", value="Language detection", inline=False)
+    embed.add_field(name="🔍 Detection", value="Language detection (langdetect)", inline=False)
     embed.add_field(name="⚠️ Action", value="Delete + 10s warning", inline=False)
     embed.add_field(name="🛡️ Exempt", value="Admins & owners", inline=False)
     embed.set_footer(text="Ω Lite | Auto-Mod")
@@ -937,7 +908,7 @@ async def automod_status(interaction: discord.Interaction):
     else:
         embed.add_field(name="🌍 Multilingual", value="None set", inline=False)
     embed.add_field(name="🔍 Detection", value="langdetect library", inline=False)
-    embed.add_field(name="⚠️ Action", value="Delete + 10s warn", inline=False)
+    embed.add_field(name="⚠️ Action", value="Delete + 10s warn (1s cooldown)", inline=False)
     embed.add_field(name="🛡️ Exempt", value="Admins & owners", inline=False)
     embed.set_footer(text="Ω Lite | Auto-Mod")
     await interaction.response.send_message(embed=embed, ephemeral=True)
