@@ -75,6 +75,9 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
+# ========== CONFIGURABLE CHANNELS ==========
+MULTILINGUAL_CHANNELS = []  # Add channel IDs here - these are EXEMPT from English-only rule
+
 # ========== ROLE ID FOR SNIPE/AFK ACCESS ==========
 SNIPE_AFK_ROLE_ID = 1391671055902572625
 
@@ -85,6 +88,9 @@ edited_messages = {}
 
 # ========== AFK STORAGE ==========
 afk_users = {}
+
+# ========== AUTO-MOD ==========
+NON_ENGLISH_PATTERN = re.compile(r'[^\x00-\x7F]+')  # Detects non-Latin characters (Hindi, Chinese, Arabic, etc.)
 
 # ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
@@ -339,11 +345,38 @@ async def on_message_edit(before, after):
     if len(edited_messages[before.channel.id]) > 50:
         edited_messages[before.channel.id] = edited_messages[before.channel.id][:50]
 
-# ========== AFK EVENTS ==========
+# ========== AFK + AUTO-MOD EVENTS ==========
 @bot.event
 async def on_message(message):
     if message.author.bot: return
     
+    # ===== AUTO-MOD: English only check =====
+    if message.guild and message.content:
+        # Skip multilingual channels, admins, and bot owner
+        is_exempt = (message.channel.id in MULTILINGUAL_CHANNELS or 
+                     message.author.guild_permissions.manage_messages or
+                     message.author.id in [1214456066687893506, 553418145063239684])
+        
+        if not is_exempt:
+            non_latin = NON_ENGLISH_PATTERN.findall(message.content)
+            if non_latin:
+                try:
+                    await message.delete()
+                    embed = discord.Embed(
+                        title="⚠️ English Only Channel",
+                        description=f"{message.author.mention}, please use **English only** in this channel.",
+                        color=0xDC2626
+                    )
+                    if MULTILINGUAL_CHANNELS:
+                        channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
+                        embed.description += f"\nUse {channels} for other languages."
+                    embed.set_footer(text="Ω Lite | Auto-Mod")
+                    await message.channel.send(embed=embed, delete_after=10)
+                except:
+                    pass
+                return  # Stop processing this message
+    
+    # ===== AFK mention detection =====
     for mention in message.mentions:
         if mention.id in afk_users:
             afk_data = afk_users[mention.id]
@@ -374,6 +407,7 @@ async def on_message(message):
             await message.reply(embed=embed, delete_after=10)
             break
     
+    # ===== AFK return detection =====
     if message.author.id in afk_users:
         afk_data = afk_users[message.author.id]
         
@@ -1426,6 +1460,42 @@ async def afk_list(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# ========== AUTO-MOD COMMANDS ==========
+@bot.tree.command(name="automod_set", description="🔧 Set multilingual channel (Owner only)")
+@app_commands.describe(channel="The multilingual channel where other languages are allowed")
+async def automod_set(interaction: discord.Interaction, channel: discord.TextChannel):
+    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
+        await interaction.response.send_message("❌ Owner only!", ephemeral=True)
+        return
+    
+    MULTILINGUAL_CHANNELS.clear()
+    MULTILINGUAL_CHANNELS.append(channel.id)
+    
+    embed = discord.Embed(
+        title="✅ Auto-Mod Configured",
+        description=f"**{channel.mention}** is now the multilingual channel.\nAll other channels will require English only.",
+        color=0x10B981
+    )
+    embed.add_field(name="🔍 Detection", value="Non-Latin character detection (Hindi, Chinese, Arabic, etc.)", inline=False)
+    embed.add_field(name="⚠️ Action", value="Delete message + 10-second warning", inline=False)
+    embed.add_field(name="🛡️ Exempt", value="Admins and bot owners are exempt", inline=False)
+    embed.set_footer(text="Ω Lite | Auto-Mod System")
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="automod_status", description="📊 Check auto-mod configuration")
+async def automod_status(interaction: discord.Interaction):
+    embed = discord.Embed(title="🛡️ Auto-Mod Status", color=0x8B5CF6)
+    if MULTILINGUAL_CHANNELS:
+        channel_mentions = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
+        embed.add_field(name="🌍 Multilingual Channels", value=channel_mentions, inline=False)
+    else:
+        embed.add_field(name="🌍 Multilingual Channels", value="None set - English enforced everywhere!", inline=False)
+    embed.add_field(name="🔍 Detection Method", value="Non-Latin character detection", inline=False)
+    embed.add_field(name="⚠️ Action", value="Delete message + warn user (10s)", inline=False)
+    embed.add_field(name="🛡️ Exempt", value="Admins and bot owners", inline=False)
+    embed.set_footer(text="Ω Lite | Auto-Mod System")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ========== UTILITY COMMANDS ==========
 @bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
@@ -1532,6 +1602,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="📢 **Announcements**", value="`/announce` - Schedule announcement\n`/announce_list` - View yours\n`/announce_cancel` - Cancel", inline=False)
     embed.add_field(name="🔫 **Snipe (Role)**", value="`/snipe` - Show deleted messages\n`/editsnipe` - Show edited messages\n`/snipe_clear` - Clear history", inline=False)
     embed.add_field(name="💤 **AFK (Role)**", value="`/afk` - Set yourself AFK\n`/afk_list` - View AFK users", inline=False)
+    embed.add_field(name="🛡️ **Auto-Mod**", value="`/automod_set` - Set multilingual channel\n`/automod_status` - View config", inline=False)
     embed.add_field(name="💾 **Backup & Restore**", value="`/backup` - Download data\n`/restore` - Restore data", inline=False)
     embed.add_field(name="🔧 **Utilities**", value="`/ping` - Check status\n`/help` - This menu\n`/health` - Bot stats (Admin)\n`/sync` - Sync commands (Owner)", inline=False)
     embed.add_field(name="📝 **Getting Timestamps**", value="Use `/datetotimestamp` to get Unix timestamps for scheduling announcements!", inline=False)
