@@ -75,8 +75,8 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
-# ========== CONFIGURABLE CHANNELS ==========
-MULTILINGUAL_CHANNELS = []  # Add channel IDs here - these are EXEMPT from English-only rule
+# ========== MULTILINGUAL CHANNEL (HARDCODED) ==========
+MULTILINGUAL_CHANNELS = [1535890494968692806]  # This channel is exempt from English-only rule
 
 # ========== ROLE ID FOR SNIPE/AFK ACCESS ==========
 SNIPE_AFK_ROLE_ID = 1391671055902572625
@@ -90,7 +90,7 @@ edited_messages = {}
 afk_users = {}
 
 # ========== AUTO-MOD ==========
-NON_ENGLISH_PATTERN = re.compile(r'[^\x00-\x7F]+')  # Detects non-Latin characters (Hindi, Chinese, Arabic, etc.)
+NON_ENGLISH_PATTERN = re.compile(r'[^\x00-\x7F]+')
 
 # ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
@@ -350,9 +350,8 @@ async def on_message_edit(before, after):
 async def on_message(message):
     if message.author.bot: return
     
-    # ===== AUTO-MOD: English only check =====
+    # ===== AUTO-MOD: English only check (RUN FIRST) =====
     if message.guild and message.content:
-        # Skip multilingual channels, admins, and bot owner
         is_exempt = (message.channel.id in MULTILINGUAL_CHANNELS or 
                      message.author.guild_permissions.manage_messages or
                      message.author.id in [1214456066687893506, 553418145063239684])
@@ -362,19 +361,26 @@ async def on_message(message):
             if non_latin:
                 try:
                     await message.delete()
+                    print(f"🗑️ Auto-Mod: Deleted non-English from {message.author} in #{message.channel}: {message.content[:50]}")
+                except Exception as e:
+                    print(f"⚠️ Auto-Mod delete error: {e}")
+                    return
+                
+                try:
                     embed = discord.Embed(
                         title="⚠️ English Only Channel",
                         description=f"{message.author.mention}, please use **English only** in this channel.",
                         color=0xDC2626
                     )
-                    if MULTILINGUAL_CHANNELS:
-                        channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
-                        embed.description += f"\nUse {channels} for other languages."
+                    channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
+                    embed.description += f"\nUse {channels} for other languages."
                     embed.set_footer(text="Ω Lite | Auto-Mod")
                     await message.channel.send(embed=embed, delete_after=10)
-                except:
-                    pass
-                return  # Stop processing this message
+                    print(f"⚠️ Auto-Mod: Warning sent to {message.author}")
+                except Exception as e:
+                    print(f"⚠️ Auto-Mod warning error: {e}")
+                
+                return
     
     # ===== AFK mention detection =====
     for mention in message.mentions:
@@ -442,6 +448,7 @@ async def on_message(message):
 async def on_ready():
     print(f'⚡ Ω LITE is now operational!')
     print(f'📊 Connected to {len(bot.guilds)} servers')
+    print(f'🛡️ Auto-Mod: Active | Multilingual: <#{MULTILINGUAL_CHANNELS[0] if MULTILINGUAL_CHANNELS else "None"}>')
     bot.loop.create_task(check_announcements())
     bot.loop.create_task(self_ping())
     bot.loop.create_task(memory_cleanup())
