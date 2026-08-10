@@ -17,9 +17,6 @@ import signal
 import aiohttp
 import gc
 from contextlib import contextmanager
-from langdetect import detect, DetectorFactory
-
-DetectorFactory.seed = 0
 
 # ========== FLASK SERVER ==========
 app = Flask('')
@@ -78,9 +75,6 @@ init_announcements_db()
 init_lfm_db()
 print("✅ Databases initialized")
 
-# ========== MULTILINGUAL CHANNEL (HARDCODED) ==========
-MULTILINGUAL_CHANNELS = [1535890494968692806]
-
 # ========== ROLE ID FOR SNIPE/AFK ACCESS ==========
 SNIPE_AFK_ROLE_ID = 1391671055902572625
 
@@ -91,9 +85,6 @@ edited_messages = {}
 
 # ========== AFK STORAGE ==========
 afk_users = {}
-
-# ========== AUTO-MOD COOLDOWN ==========
-auto_mod_last_action = {}  # {channel_id: datetime}
 
 # ========== COOLDOWNS ==========
 def _check_cooldown(table, seconds):
@@ -131,7 +122,7 @@ def has_snipe_afk_role():
         role = interaction.guild.get_role(SNIPE_AFK_ROLE_ID)
         if role and role in interaction.user.roles: return True
         if interaction.user.id in [1214456066687893506, 553418145063239684]: return True
-        await interaction.response.send_message("❌ You need the designated role!", ephemeral=True)
+        await interaction.response.send_message("❌ You need the designated role to use this command!", ephemeral=True)
         return False
     return app_commands.check(predicate)
 
@@ -251,9 +242,11 @@ class SnipePagination(discord.ui.View):
     def get_embed(self):
         msg = self.messages[self.current_page]
         time_diff = (datetime.now() - msg["time"]).seconds
+        
         if time_diff < 60: time_text = f"{time_diff}s ago"
         elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
         else: time_text = f"{time_diff // 3600}h ago"
+        
         total = len(self.messages)
         
         if self.is_edit:
@@ -269,6 +262,7 @@ class SnipePagination(discord.ui.View):
             if msg.get("attachments"):
                 embed.add_field(name="📎 Attachments", value="\n".join(msg["attachments"][:3])[:1024], inline=False)
                 if msg["attachments"]: embed.set_image(url=msg["attachments"][0])
+        
         return embed
     
     @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.gray)
@@ -309,7 +303,10 @@ bot = FCOHomiesBot()
 async def on_message_delete(message):
     if message.author.bot or message.author.id in SNIPE_IGNORE: return
     if not message.content and not message.attachments: return
-    if message.channel.id not in deleted_messages: deleted_messages[message.channel.id] = []
+    
+    if message.channel.id not in deleted_messages:
+        deleted_messages[message.channel.id] = []
+    
     msg_data = {
         "content": message.content or "*No text*",
         "author": str(message.author),
@@ -317,6 +314,7 @@ async def on_message_delete(message):
         "time": datetime.now(),
         "attachments": [att.url for att in message.attachments] if message.attachments else []
     }
+    
     deleted_messages[message.channel.id].insert(0, msg_data)
     if len(deleted_messages[message.channel.id]) > 50:
         deleted_messages[message.channel.id] = deleted_messages[message.channel.id][:50]
@@ -325,7 +323,10 @@ async def on_message_delete(message):
 async def on_message_edit(before, after):
     if before.author.bot or before.author.id in SNIPE_IGNORE: return
     if before.content == after.content: return
-    if before.channel.id not in edited_messages: edited_messages[before.channel.id] = []
+    
+    if before.channel.id not in edited_messages:
+        edited_messages[before.channel.id] = []
+    
     msg_data = {
         "before": before.content or "*No text*",
         "after": after.content or "*No text*",
@@ -333,62 +334,16 @@ async def on_message_edit(before, after):
         "author_avatar": before.author.display_avatar.url if before.author.display_avatar else None,
         "time": datetime.now()
     }
+    
     edited_messages[before.channel.id].insert(0, msg_data)
     if len(edited_messages[before.channel.id]) > 50:
         edited_messages[before.channel.id] = edited_messages[before.channel.id][:50]
 
-# ========== AFK + AUTO-MOD EVENTS ==========
+# ========== AFK EVENTS ==========
 @bot.event
 async def on_message(message):
-    if message.author.bot: 
-        await bot.process_commands(message)
-        return
+    if message.author.bot: return
     
-    # ===== AUTO-MOD: Language detection with cooldown =====
-    if message.guild and message.content and len(message.content.strip()) > 10:
-        is_exempt = (message.channel.id in MULTILINGUAL_CHANNELS or 
-                     message.author.guild_permissions.manage_messages or
-                     message.author.id in [1214456066687893506, 553418145063239684])
-        
-        if not is_exempt:
-            # Check per-channel cooldown (1 second between deletions)
-            last = auto_mod_last_action.get(message.channel.id)
-            if last and (datetime.now() - last).total_seconds() < 1:
-                pass  # Too soon, skip
-            else:
-                ascii_count = sum(1 for c in message.content if ord(c) < 128)
-                total_chars = len(message.content)
-                
-                if ascii_count / total_chars < 0.85:
-                    try:
-                        lang = detect(message.content)
-                        if lang != 'en':
-                            print(f"🗑️ Auto-Mod: {lang} detected - deleting: {message.content[:50]}")
-                            auto_mod_last_action[message.channel.id] = datetime.now()
-                            
-                            try:
-                                await message.delete()
-                            except Exception as e:
-                                print(f"⚠️ Delete error: {e}")
-                            
-                            try:
-                                channels = ", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS])
-                                embed = discord.Embed(
-                                    title="⚠️ English Only Channel",
-                                    description=f"{message.author.mention}, please use **English only**.\nUse {channels} for other languages.",
-                                    color=0xDC2626
-                                )
-                                embed.set_footer(text="Ω Lite | Auto-Mod")
-                                await message.channel.send(embed=embed, delete_after=10)
-                            except:
-                                pass
-                            
-                            await bot.process_commands(message)
-                            return
-                    except:
-                        pass
-    
-    # ===== AFK mention detection =====
     for mention in message.mentions:
         if mention.id in afk_users:
             afk_data = afk_users[mention.id]
@@ -396,23 +351,53 @@ async def on_message(message):
             if time_diff < 60: time_text = f"{time_diff}s ago"
             elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
             else: time_text = f"{time_diff // 3600}h ago"
-            if "pings" not in afk_data: afk_data["pings"] = []
+            
+            if "pings" not in afk_data:
+                afk_data["pings"] = []
+            
             afk_data["pings"].append({
-                "author": str(message.author), "content": message.content[:100],
-                "time": datetime.now(), "jump_url": message.jump_url, "channel": str(message.channel)
+                "author": str(message.author),
+                "author_mention": message.author.mention,
+                "content": message.content[:100],
+                "time": datetime.now(),
+                "jump_url": message.jump_url,
+                "channel": str(message.channel)
             })
-            if len(afk_data["pings"]) > 10: afk_data["pings"] = afk_data["pings"][-10:]
-            embed = discord.Embed(description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}", color=0xF59E0B)
+            
+            if len(afk_data["pings"]) > 10:
+                afk_data["pings"] = afk_data["pings"][-10:]
+            
+            embed = discord.Embed(
+                description=f"💤 **{mention.display_name}** is AFK: {afk_data['reason']}\n🕐 {time_text}",
+                color=0xF59E0B
+            )
             await message.reply(embed=embed, delete_after=10)
             break
     
-    # ===== AFK return detection =====
     if message.author.id in afk_users:
         afk_data = afk_users[message.author.id]
-        embed = discord.Embed(description=f"👋 Welcome back **{message.author.display_name}**!", color=0x10B981)
+        
+        embed = discord.Embed(
+            description=f"👋 Welcome back **{message.author.display_name}**! Removed your AFK.",
+            color=0x10B981
+        )
+        
         if "pings" in afk_data and afk_data["pings"]:
-            ping_text = "\n".join([f"• **{p['author']}**: [Jump]({p['jump_url']})" for p in afk_data["pings"][:5]])
-            embed.add_field(name=f"📩 {len(afk_data['pings'])} ping(s)", value=ping_text[:1024], inline=False)
+            ping_text = ""
+            for ping in afk_data["pings"][:5]:
+                ping_time_diff = (datetime.now() - ping["time"]).seconds
+                if ping_time_diff < 60: ping_time_text = f"{ping_time_diff}s ago"
+                elif ping_time_diff < 3600: ping_time_text = f"{ping_time_diff // 60}m ago"
+                else: ping_time_text = f"{ping_time_diff // 3600}h ago"
+                
+                ping_text += f"• **{ping['author']}** in {ping['channel']}: [Jump to message]({ping['jump_url']})\n  └ {ping_time_text}\n"
+            
+            embed.add_field(
+                name=f"📩 You were pinged {len(afk_data['pings'])} time(s):",
+                value=ping_text[:1024],
+                inline=False
+            )
+        
         del afk_users[message.author.id]
         await message.reply(embed=embed)
     
@@ -423,7 +408,6 @@ async def on_message(message):
 async def on_ready():
     print(f'⚡ Ω LITE is now operational!')
     print(f'📊 Connected to {len(bot.guilds)} servers')
-    print(f'🛡️ Auto-Mod: Active | Multilingual: <#{MULTILINGUAL_CHANNELS[0] if MULTILINGUAL_CHANNELS else "None"}>')
     bot.loop.create_task(check_announcements())
     bot.loop.create_task(self_ping())
     bot.loop.create_task(memory_cleanup())
@@ -464,361 +448,896 @@ async def check_announcements():
                     if ch:
                         role = ch.guild.get_role(int(a[3]))
                         if role:
-                            embed = discord.Embed(title=f"📢 {a[1]}", description=a[2], color=0x8B5CF6, timestamp=datetime.now())
+                            embed = discord.Embed(
+                                title=f"📢 {a[1]}",
+                                description=a[2],
+                                color=0x8B5CF6,
+                                timestamp=datetime.now()
+                            )
                             embed.add_field(name="Scheduled by", value=a[7], inline=True)
-                            embed.add_field(name="ID", value=f"`{a[0]}`", inline=True)
+                            embed.add_field(name="Announcement ID", value=f"`{a[0]}`", inline=True)
                             embed.set_footer(text="Ω Lite Announcement System")
                             await ch.send(content=f"{role.mention}", embed=embed)
                             update_announcement_status(a[0], "sent")
-                except: pass
+                            print(f"✅ Sent announcement {a[0]} in {ch.guild.name}")
+                        else: update_announcement_status(a[0], "failed")
+                    else: update_announcement_status(a[0], "failed")
+                except Exception as e: print(f"❌ Failed announcement {a[0]}: {e}")
             await asyncio.sleep(30)
-        except: await asyncio.sleep(60)
+        except Exception as e: print(f"❌ Checker error: {e}"); await asyncio.sleep(60)
 
 # ========== ANNOUNCEMENT COMMANDS ==========
 
-@bot.tree.command(name="announce", description="Schedule an announcement")
-@app_commands.describe(title="Title", description="Content", role="Role to ping", timestamp="Unix timestamp or <t:...>")
+@bot.tree.command(name="announce", description="Schedule an announcement with role ping using timestamp")
+@app_commands.describe(
+    title="Title of the announcement",
+    description="What the announcement is about",
+    role="Role to ping (mention the role)",
+    timestamp="Unix timestamp or Discord timestamp (e.g., 1734567890 or <t:1734567890>)"
+)
 async def schedule_announcement(interaction: discord.Interaction, title: str, description: str, role: discord.Role, timestamp: str):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
+    
     try:
         ts = parse_timestamp(timestamp)
         if ts is None:
-            await interaction.followup.send("❌ Invalid timestamp! Examples: `1734567890` or `<t:1734567890>`", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Invalid timestamp! Please provide a valid Unix timestamp or Discord timestamp.\n"
+                "**Examples:**\n"
+                "• `1734567890` (Unix timestamp in seconds)\n"
+                "• `<t:1734567890>` (Discord timestamp format)",
+                ephemeral=True
+            )
             return
+        
         announce_time = datetime.fromtimestamp(ts, tz=pytz.UTC)
-        if announce_time <= datetime.now(pytz.UTC):
-            await interaction.followup.send("❌ Must be in the future!", ephemeral=True)
+        now = datetime.now(pytz.UTC)
+        
+        if announce_time <= now:
+            await interaction.followup.send("❌ Announcement time must be in the future!", ephemeral=True)
             return
-        aid = add_announcement_to_db(title, description, str(role.id), str(interaction.channel_id), announce_time, str(interaction.user.id), interaction.user.name)
-        if not aid:
-            await interaction.followup.send("❌ Failed!", ephemeral=True)
+        
+        announcement_id = add_announcement_to_db(
+            title, description, str(role.id), str(interaction.channel_id),
+            announce_time, str(interaction.user.id), interaction.user.name
+        )
+        
+        if not announcement_id:
+            await interaction.followup.send("❌ Failed to schedule announcement. Please try again.", ephemeral=True)
             return
-        embed = discord.Embed(title="✅ Scheduled!", description=f"**{title}**\n{description}\n\n⏰ <t:{ts}:F>\n🆔 `{aid}`", color=0x10B981)
-        embed.set_footer(text="Ω Lite | /announce_list")
+        
+        embed = discord.Embed(
+            title="✅ Announcement Scheduled!",
+            description=f"I'll announce this in {interaction.channel.mention}",
+            color=0x10B981
+        )
+        
+        time_diff = announce_time - now
+        days = time_diff.days
+        hours = time_diff.seconds // 3600
+        minutes = (time_diff.seconds % 3600) // 60
+        seconds = time_diff.seconds % 60
+        
+        if days > 0:
+            time_display = f"in {days} day{'s' if days > 1 else ''}, {hours} hour{'s' if hours != 1 else ''}"
+        elif hours > 0:
+            time_display = f"in {hours} hour{'s' if hours > 1 else ''}, {minutes} minute{'s' if minutes != 1 else ''}"
+        elif minutes > 0:
+            time_display = f"in {minutes} minute{'s' if minutes > 1 else ''}"
+        else:
+            time_display = f"in {seconds} second{'s' if seconds != 1 else ''}"
+        
+        embed.add_field(name="📢 **Announcement**", value=f"**{title}**\n{description}", inline=False)
+        embed.add_field(name="👥 Role", value=role.mention, inline=True)
+        embed.add_field(name="⏰ Time", value=f"<t:{ts}:F>\n({time_display})", inline=True)
+        embed.add_field(name="🆔 ID", value=f"`{announcement_id}`", inline=True)
+        embed.add_field(
+            name="💡 **Commands**",
+            value=f"`/announce_list` - View your announcements\n`/announce_cancel {announcement_id}` - Cancel this",
+            inline=False
+        )
+        embed.set_footer(text="Ω Lite | Announcement System | Use Unix timestamps")
+        
         await interaction.followup.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         health_checker.error_count += 1
-        await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="announce_list", description="View your announcements")
+@bot.tree.command(name="announce_list", description="View all your scheduled announcements")
 async def list_announcements(interaction: discord.Interaction):
+    health_checker.command_count += 1
     announcements = get_user_announcements(str(interaction.user.id))
+    
     if not announcements:
-        await interaction.response.send_message("📭 None!", ephemeral=True)
+        await interaction.response.send_message("📭 You have no scheduled announcements!", ephemeral=True)
         return
-    embed = discord.Embed(title="📋 Your Announcements", color=0x8B5CF6)
-    for a in announcements[:10]:
-        ts = int(datetime.fromisoformat(a[5]).timestamp())
-        embed.add_field(name=f"`{a[0]}` - {a[1]}", value=f"Status: {a[9]} | <t:{ts}:R>", inline=False)
+    
+    pending = [a for a in announcements if a[9] == "pending"]
+    sent = [a for a in announcements if a[9] == "sent"]
+    cancelled = [a for a in announcements if a[9] == "cancelled"]
+    
+    embed = discord.Embed(
+        title="📋 Your Announcements",
+        description=f"Total: {len(announcements)} | ✅ Pending: {len(pending)} | 📤 Sent: {len(sent)} | ❌ Cancelled: {len(cancelled)}",
+        color=0x8B5CF6
+    )
+    
+    if pending:
+        text = ""
+        for ann in pending[:5]:
+            announce_time = datetime.fromisoformat(ann[5])
+            ts = int(announce_time.timestamp())
+            text += f"**`{ann[0]}`** | {ann[1]} | <t:{ts}:R>\n"
+        embed.add_field(name=f"✅ Pending ({len(pending)})", value=text, inline=False)
+    
+    if sent:
+        text = ""
+        for ann in sent[:3]:
+            announce_time = datetime.fromisoformat(ann[5])
+            ts = int(announce_time.timestamp())
+            text += f"**`{ann[0]}`** | {ann[1]} | <t:{ts}:R>\n"
+        embed.add_field(name=f"📤 Sent ({len(sent)})", value=text or "None", inline=False)
+    
+    embed.set_footer(text="Ω Lite | Use /announce_cancel <id> to cancel")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="announce_cancel", description="Cancel an announcement")
-@app_commands.describe(announcement_id="ID to cancel")
+@bot.tree.command(name="announce_cancel", description="Cancel a scheduled announcement")
+@app_commands.describe(announcement_id="The ID of the announcement to cancel")
 async def cancel_announcement_command(interaction: discord.Interaction, announcement_id: str):
-    if cancel_announcement(announcement_id, str(interaction.user.id)):
-        await interaction.response.send_message(f"✅ Cancelled!", ephemeral=True)
+    health_checker.command_count += 1
+    success = cancel_announcement(announcement_id, str(interaction.user.id))
+    
+    if success:
+        await interaction.response.send_message(f"✅ Announcement `{announcement_id}` cancelled!", ephemeral=True)
     else:
-        await interaction.response.send_message("❌ Not found!", ephemeral=True)
+        await interaction.response.send_message(f"❌ Announcement `{announcement_id}` not found or doesn't belong to you!", ephemeral=True)
 
 # ========== LFM COMMAND ==========
 
-@bot.tree.command(name="lfm", description="Looking for match (5-min cooldown)")
+@bot.tree.command(name="lfm", description="Looking for match - Pings the LFM role (5-min GLOBAL cooldown)")
 async def lfm_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
+    
     try:
-        on_cd, rem, uid, _ = check_lfm_global_cooldown()
-        if on_cd:
-            await interaction.followup.send(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True)
+        on_cooldown, remaining, last_user_id, last_user_name = check_lfm_global_cooldown()
+        
+        if on_cooldown:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+            
+            last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+                
+            embed = discord.Embed(
+                title="⏳ Global Cooldown Active",
+                description=f"LFM is on global cooldown for another **{time_text}**",
+                color=0xF59E0B
+            )
+            embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
+            embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
+            embed.set_footer(text="Ω Lite | LFM System (5-min cooldown)")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        role = interaction.guild.get_role(bot.lfm_role_id)
-        if not role:
-            await interaction.followup.send("❌ Role not found!", ephemeral=True)
+        
+        lfm_role = interaction.guild.get_role(bot.lfm_role_id)
+        
+        if not lfm_role:
+            await interaction.followup.send("❌ LFM role not found! Please contact an admin.", ephemeral=True)
             return
-        embed = discord.Embed(title="🎮 Looking for Match", description=f"{interaction.user.mention} is looking for a match!", color=0x10B981, timestamp=datetime.now())
+        
+        embed = discord.Embed(
+            title="🎮 Looking for Match",
+            description=f"{interaction.user.mention} is looking for a match!",
+            color=0x10B981,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
+        embed.add_field(name="💡 How to join", value="Ping the player who used this command!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
-        embed.set_footer(text="Ω Lite | 5-min cooldown")
-        await interaction.channel.send(content=f"{role.mention}", embed=embed)
+        embed.set_footer(text="Ω Lite | LFM System (5-min global cooldown)")
+        
+        await interaction.channel.send(content=f"{lfm_role.mention}", embed=embed)
         update_lfm_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted!", ephemeral=True)
+        
+        confirm_embed = discord.Embed(
+            title="✅ LFM Posted!",
+            description="Your looking for match message has been posted!",
+            color=0x10B981
+        )
+        confirm_embed.add_field(name="🌍 Global Cooldown", value="LFM is now on cooldown for **5 minutes** for EVERYONE", inline=False)
+        confirm_embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(minutes=5)).timestamp())}:R>", inline=False)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+        
     except Exception as e:
         health_checker.error_count += 1
-        await interaction.followup.send(f"❌ {e}", ephemeral=True)
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="lfm_status", description="Check LFM cooldown")
+@bot.tree.command(name="lfm_status", description="Check LFM global cooldown status")
 async def lfm_status_check(interaction: discord.Interaction):
-    on_cd, rem, uid, _ = check_lfm_global_cooldown()
-    await interaction.response.send_message(f"⏳ {int(rem)}s left. Last: <@{uid}>" if on_cd else "✅ Ready!", ephemeral=True)
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    on_cooldown, remaining, last_user_id, last_user_name = check_lfm_global_cooldown()
+    
+    if on_cooldown:
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+        
+        last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+            
+        embed = discord.Embed(
+            title="⏳ LFM Global Cooldown",
+            description=f"LFM is currently on **global cooldown**",
+            color=0xF59E0B
+        )
+        embed.add_field(name="Time remaining", value=time_text, inline=True)
+        embed.add_field(name="Ready at", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=True)
+        embed.add_field(name="Last used by", value=last_user_mention, inline=False)
+    else:
+        embed = discord.Embed(
+            title="✅ LFM Ready",
+            description="LFM is **available** right now! Use `/lfm` to ping the role.",
+            color=0x10B981
+        )
+    
+    embed.set_footer(text="Ω Lite | LFM System (5-min cooldown)")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== SQUADHELP COMMAND ==========
 
-@bot.tree.command(name="squadhelp", description="Request squad help (15-min cooldown)")
+@bot.tree.command(name="squadhelp", description="Request help with your squad - Pings the SquadHelp role (15-min GLOBAL cooldown)")
 async def squadhelp_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
+    
     try:
-        on_cd, rem, uid, _ = check_squadhelp_global_cooldown()
-        if on_cd:
-            await interaction.followup.send(f"⏳ {int(rem//60)}m left. Last: <@{uid}>", ephemeral=True)
+        on_cooldown, remaining, last_user_id, last_user_name = check_squadhelp_global_cooldown()
+        
+        if on_cooldown:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+            
+            last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+                
+            embed = discord.Embed(
+                title="⏳ Global Cooldown Active",
+                description=f"SquadHelp is on global cooldown for another **{time_text}**",
+                color=0xF59E0B
+            )
+            embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
+            embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
+            embed.set_footer(text="Ω Lite | SquadHelp System (15-min cooldown)")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        role = interaction.guild.get_role(bot.squadhelp_role_id)
-        if not role:
-            await interaction.followup.send("❌ Role not found!", ephemeral=True)
+        
+        squadhelp_role = interaction.guild.get_role(bot.squadhelp_role_id)
+        
+        if not squadhelp_role:
+            await interaction.followup.send("❌ SquadHelp role not found! Please contact an admin.", ephemeral=True)
             return
-        embed = discord.Embed(title="🛡️ Squad Help", description=f"{interaction.user.mention} needs squad help!", color=0x3B82F6, timestamp=datetime.now())
+        
+        embed = discord.Embed(
+            title="🛡️ Squad Help Requested",
+            description=f"{interaction.user.mention} needs help with their squad!",
+            color=0x3B82F6,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
+        embed.add_field(name="💡 How to help", value="Ping the player who used this command and offer your advice!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
-        embed.set_footer(text="Ω Lite | 15-min cooldown")
-        await interaction.channel.send(content=f"{role.mention} <@&{bot.squadhelp_role_id_2}>", embed=embed)
+        embed.set_footer(text="Ω Lite | SquadHelp System (15-min global cooldown)")
+        
+        await interaction.channel.send(content=f"{squadhelp_role.mention} <@&{bot.squadhelp_role_id_2}>", embed=embed)
         update_squadhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted!", ephemeral=True)
+        
+        confirm_embed = discord.Embed(
+            title="✅ SquadHelp Posted!",
+            description="Your squad help request has been posted!",
+            color=0x3B82F6
+        )
+        confirm_embed.add_field(name="🌍 Global Cooldown", value="SquadHelp is now on cooldown for **15 minutes** for EVERYONE", inline=False)
+        confirm_embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(minutes=15)).timestamp())}:R>", inline=False)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+        
     except Exception as e:
         health_checker.error_count += 1
-        await interaction.followup.send(f"❌ {e}", ephemeral=True)
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="squadhelp_status", description="Check SquadHelp cooldown")
+@bot.tree.command(name="squadhelp_status", description="Check SquadHelp global cooldown status")
 async def squadhelp_status_check(interaction: discord.Interaction):
-    on_cd, rem, uid, _ = check_squadhelp_global_cooldown()
-    await interaction.response.send_message(f"⏳ {int(rem//60)}m left. Last: <@{uid}>" if on_cd else "✅ Ready!", ephemeral=True)
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    on_cooldown, remaining, last_user_id, last_user_name = check_squadhelp_global_cooldown()
+    
+    if on_cooldown:
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+        
+        last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+            
+        embed = discord.Embed(
+            title="⏳ SquadHelp Global Cooldown",
+            description=f"SquadHelp is currently on **global cooldown**",
+            color=0xF59E0B
+        )
+        embed.add_field(name="Time remaining", value=time_text, inline=True)
+        embed.add_field(name="Ready at", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=True)
+        embed.add_field(name="Last used by", value=last_user_mention, inline=False)
+    else:
+        embed = discord.Embed(
+            title="✅ SquadHelp Ready",
+            description="SquadHelp is **available** right now! Use `/squadhelp` to ping the role.",
+            color=0x3B82F6
+        )
+    
+    embed.set_footer(text="Ω Lite | SquadHelp System (15-min cooldown)")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== DRHELP COMMAND ==========
 
-@bot.tree.command(name="drhelp", description="Request DR help (5-min cooldown)")
+@bot.tree.command(name="drhelp", description="Request help with Division Rivals - Pings the DRHelp role (5-min GLOBAL cooldown)")
 async def drhelp_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
+    
     try:
-        on_cd, rem, uid, _ = check_drhelp_global_cooldown()
-        if on_cd:
-            await interaction.followup.send(f"⏳ {int(rem)}s left. Last: <@{uid}>", ephemeral=True)
+        on_cooldown, remaining, last_user_id, last_user_name = check_drhelp_global_cooldown()
+        
+        if on_cooldown:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+            
+            last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+                
+            embed = discord.Embed(
+                title="⏳ Global Cooldown Active",
+                description=f"DRHelp is on global cooldown for another **{time_text}**",
+                color=0xF59E0B
+            )
+            embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
+            embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
+            embed.set_footer(text="Ω Lite | DRHelp System (5-min cooldown)")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        role = interaction.guild.get_role(bot.drhelp_role_id)
-        if not role:
-            await interaction.followup.send("❌ Role not found!", ephemeral=True)
+        
+        drhelp_role = interaction.guild.get_role(bot.drhelp_role_id)
+        
+        if not drhelp_role:
+            await interaction.followup.send("❌ DRHelp role not found! Please contact an admin.", ephemeral=True)
             return
-        embed = discord.Embed(title="⚔️ DR Help", description=f"{interaction.user.mention} needs DR help!", color=0xEF4444, timestamp=datetime.now())
+        
+        embed = discord.Embed(
+            title="⚔️ Division Rivals Help Requested",
+            description=f"{interaction.user.mention} needs help with Division Rivals!",
+            color=0xEF4444,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Player", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
+        embed.add_field(name="💡 How to help", value="Ping the player who used this command and offer your advice!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
-        embed.set_footer(text="Ω Lite | 5-min cooldown")
-        await interaction.channel.send(content=f"{role.mention}", embed=embed)
+        embed.set_footer(text="Ω Lite | DRHelp System (5-min global cooldown)")
+        
+        await interaction.channel.send(content=f"{drhelp_role.mention}", embed=embed)
         update_drhelp_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted!", ephemeral=True)
+        
+        confirm_embed = discord.Embed(
+            title="✅ DRHelp Posted!",
+            description="Your Division Rivals help request has been posted!",
+            color=0xEF4444
+        )
+        confirm_embed.add_field(name="🌍 Global Cooldown", value="DRHelp is now on cooldown for **5 minutes** for EVERYONE", inline=False)
+        confirm_embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(minutes=5)).timestamp())}:R>", inline=False)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+        
     except Exception as e:
         health_checker.error_count += 1
-        await interaction.followup.send(f"❌ {e}", ephemeral=True)
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="drhelp_status", description="Check DRHelp cooldown")
+@bot.tree.command(name="drhelp_status", description="Check DRHelp global cooldown status")
 async def drhelp_status_check(interaction: discord.Interaction):
-    on_cd, rem, uid, _ = check_drhelp_global_cooldown()
-    await interaction.response.send_message(f"⏳ {int(rem)}s left. Last: <@{uid}>" if on_cd else "✅ Ready!", ephemeral=True)
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    on_cooldown, remaining, last_user_id, last_user_name = check_drhelp_global_cooldown()
+    
+    if on_cooldown:
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+        
+        last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+            
+        embed = discord.Embed(
+            title="⏳ DRHelp Global Cooldown",
+            description=f"DRHelp is currently on **global cooldown**",
+            color=0xF59E0B
+        )
+        embed.add_field(name="Time remaining", value=time_text, inline=True)
+        embed.add_field(name="Ready at", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=True)
+        embed.add_field(name="Last used by", value=last_user_mention, inline=False)
+    else:
+        embed = discord.Embed(
+            title="✅ DRHelp Ready",
+            description="DRHelp is **available** right now! Use `/drhelp` to ping the role.",
+            color=0xEF4444
+        )
+    
+    embed.set_footer(text="Ω Lite | DRHelp System (5-min cooldown)")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== EVENTPING COMMAND ==========
 
-@bot.tree.command(name="eventping", description="📢 Ping for events (15-min cooldown)")
+@bot.tree.command(name="eventping", description="📢 Ping for events - Pings the Event role (15-min GLOBAL cooldown)")
 async def eventping_command(interaction: discord.Interaction):
     health_checker.command_count += 1
     await interaction.response.defer(ephemeral=True)
+    
     try:
-        on_cd, rem, uid, _ = check_eventping_global_cooldown()
-        if on_cd:
-            await interaction.followup.send(f"⏳ {int(rem//60)}m left. Last: <@{uid}>", ephemeral=True)
+        on_cooldown, remaining, last_user_id, last_user_name = check_eventping_global_cooldown()
+        
+        if on_cooldown:
+            minutes = int(remaining // 60)
+            seconds = int(remaining % 60)
+            time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+            
+            last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+                
+            embed = discord.Embed(
+                title="⏳ Global Cooldown Active",
+                description=f"EventPing is on global cooldown for another **{time_text}**",
+                color=0xF59E0B
+            )
+            embed.add_field(name="Last used by", value=f"{last_user_mention}", inline=False)
+            embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=False)
+            embed.set_footer(text="Ω Lite | EventPing System (15-min cooldown)")
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
-        role = interaction.guild.get_role(bot.eventping_role_id)
-        if not role:
-            await interaction.followup.send("❌ Role not found!", ephemeral=True)
+        
+        eventping_role = interaction.guild.get_role(bot.eventping_role_id)
+        
+        if not eventping_role:
+            await interaction.followup.send("❌ EventPing role not found! Please contact an admin.", ephemeral=True)
             return
-        embed = discord.Embed(title="📢 Event Alert!", description=f"{interaction.user.mention} has an event!", color=0x8B5CF6, timestamp=datetime.now())
+        
+        embed = discord.Embed(
+            title="📢 Event Alert!",
+            description=f"{interaction.user.mention} has an event announcement!",
+            color=0x8B5CF6,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="Posted by", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Time", value=f"<t:{int(datetime.now().timestamp())}:R>", inline=True)
+        embed.add_field(name="💡 How to respond", value="React or reply to this message to join the event!", inline=False)
         embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
-        embed.set_footer(text="Ω Lite | 15-min cooldown")
-        await interaction.channel.send(content=f"{role.mention}", embed=embed)
+        embed.set_footer(text="Ω Lite | EventPing System (15-min global cooldown)")
+        
+        await interaction.channel.send(content=f"{eventping_role.mention}", embed=embed)
         update_eventping_global_cooldown(str(interaction.user.id), interaction.user.name)
-        await interaction.followup.send("✅ Posted!", ephemeral=True)
+        
+        confirm_embed = discord.Embed(
+            title="✅ EventPing Posted!",
+            description="Your event announcement has been posted!",
+            color=0x8B5CF6
+        )
+        confirm_embed.add_field(name="🌍 Global Cooldown", value="EventPing is now on cooldown for **15 minutes** for EVERYONE", inline=False)
+        confirm_embed.add_field(name="Next use", value=f"<t:{int((datetime.now() + timedelta(minutes=15)).timestamp())}:R>", inline=False)
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+        
     except Exception as e:
         health_checker.error_count += 1
-        await interaction.followup.send(f"❌ {e}", ephemeral=True)
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="eventping_status", description="Check EventPing cooldown")
+@bot.tree.command(name="eventping_status", description="Check EventPing global cooldown status")
 async def eventping_status_check(interaction: discord.Interaction):
-    on_cd, rem, uid, _ = check_eventping_global_cooldown()
-    await interaction.response.send_message(f"⏳ {int(rem//60)}m left. Last: <@{uid}>" if on_cd else "✅ Ready!", ephemeral=True)
+    health_checker.command_count += 1
+    await interaction.response.defer(ephemeral=True)
+    
+    on_cooldown, remaining, last_user_id, last_user_name = check_eventping_global_cooldown()
+    
+    if on_cooldown:
+        minutes = int(remaining // 60)
+        seconds = int(remaining % 60)
+        time_text = f"{minutes} min{'s' if minutes > 1 else ''} {seconds} sec" if minutes > 0 else f"{seconds} seconds"
+        
+        last_user_mention = f"<@{last_user_id}>" if last_user_id != "0" else "Unknown"
+            
+        embed = discord.Embed(
+            title="⏳ EventPing Global Cooldown",
+            description=f"EventPing is currently on **global cooldown**",
+            color=0xF59E0B
+        )
+        embed.add_field(name="Time remaining", value=time_text, inline=True)
+        embed.add_field(name="Ready at", value=f"<t:{int((datetime.now() + timedelta(seconds=remaining)).timestamp())}:R>", inline=True)
+        embed.add_field(name="Last used by", value=last_user_mention, inline=False)
+    else:
+        embed = discord.Embed(
+            title="✅ EventPing Ready",
+            description="EventPing is **available** right now! Use `/eventping` to ping the role.",
+            color=0x8B5CF6
+        )
+    
+    embed.set_footer(text="Ω Lite | EventPing System (15-min cooldown)")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ========== OVR COMMAND ==========
 
-@bot.tree.command(name="ovr", description="Calculate team OVR")
-@app_commands.describe(count="Players (min 11)", base_ovr_values="Base OVRs separated by +", rankup_values="Rankups separated by +", total_max_badges="Max badges")
+@bot.tree.command(name="ovr", description="Calculate team OVR quickly")
+@app_commands.describe(
+    count="Number of players (min 11)",
+    base_ovr_values="Base OVR values separated by +",
+    rankup_values="Rankup values separated by +",
+    total_max_badges="Total max badges (optional)"
+)
 async def ovr_calc(interaction: discord.Interaction, count: int, base_ovr_values: str, rankup_values: str, total_max_badges: int = 0):
     health_checker.command_count += 1
     await interaction.response.defer()
+    
     try:
-        bl = [int(x.strip()) for x in base_ovr_values.split('+')]
-        rl = [int(x.strip()) for x in rankup_values.split('+')]
-        if count < 11 or len(bl) != count or len(rl) != count:
-            await interaction.followup.send(f"❌ Need {count} values each!", ephemeral=True)
+        base_list = [int(x.strip()) for x in base_ovr_values.split('+')]
+        rank_list = [int(x.strip()) for x in rankup_values.split('+')]
+        
+        if count < 11:
+            await interaction.followup.send("❌ Minimum 11 players required!", ephemeral=True)
             return
-        cb = 1 + (sum(bl) - 1) // count
-        cr = 1 + (sum(rl) - 1) // count
-        total = cb + cr + total_max_badges
+        
+        if len(base_list) != count or len(rank_list) != count:
+            await interaction.followup.send(f"❌ Expected {count} values each! Got {len(base_list)} base and {len(rank_list)} rankup values.", ephemeral=True)
+            return
+        
+        base_total = sum(base_list)
+        rank_total = sum(rank_list)
+        
+        current_base = 1 + (base_total - 1) // count
+        current_ranks = 1 + (rank_total - 1) // count
+        total_ovr = current_base + current_ranks + total_max_badges
+        
+        base_req = (current_base * count) + 1 - base_total
+        rank_req = (current_ranks * count) + 1 - rank_total
+        
         embed = discord.Embed(title="⚡ Ω Lite OVR Analysis", color=0x1E40AF)
         embed.add_field(name="👥 Players", value=count, inline=True)
-        embed.add_field(name="⭐ Base", value=cb, inline=True)
-        embed.add_field(name="⬆️ Ranks", value=cr, inline=True)
-        embed.add_field(name="🎯 Total", value=f"**{total}**" if total_max_badges else total, inline=False)
-        base_req = (cb * count) + 1 - sum(bl)
-        rank_req = (cr * count) + 1 - sum(rl)
+        embed.add_field(name="⭐ Base OVR", value=current_base, inline=True)
+        embed.add_field(name="⬆️ Rankups", value=current_ranks, inline=True)
+        
+        if total_max_badges > 0:
+            embed.add_field(name="🏅 Max Badges", value=f"+{total_max_badges}", inline=True)
+            embed.add_field(name="🎯 Total OVR", value=f"**{total_ovr}**", inline=True)
+        else:
+            embed.add_field(name="🎯 Total OVR", value=total_ovr, inline=True)
+        
         if base_req > 0 or rank_req > 0:
-            reqs = []
-            if base_req > 0: reqs.append(f"• Base OVR: +{base_req}")
-            if rank_req > 0: reqs.append(f"• Rankups: +{rank_req}")
-            embed.add_field(name="📈 Next Level", value="\n".join(reqs), inline=False)
+            req_text = []
+            if base_req > 0:
+                req_text.append(f"• Base OVR: +{base_req} total")
+            if rank_req > 0:
+                req_text.append(f"• Rankups: +{rank_req} total")
+            embed.add_field(name="📈 Next Level", value="\n".join(req_text), inline=False)
+        
         embed.set_footer(text="Ω Lite | Use + between values")
         await interaction.followup.send(embed=embed)
-    except:
-        await interaction.followup.send("❌ Invalid numbers!", ephemeral=True)
+        
+    except ValueError:
+        await interaction.followup.send("❌ Please enter valid numbers separated by +", ephemeral=True)
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error calculating OVR. Please check your input format.", ephemeral=True)
 
 # ========== INVEST COMMAND ==========
 
-@bot.tree.command(name="invest", description="Investment calculator (10% tax)")
-@app_commands.describe(buy_price="Buy price", buy_quantity="Qty", sell_price="Sell price", sell_quantity="Qty")
+@bot.tree.command(name="invest", description="Calculate investment profit/loss with 10% tax")
+@app_commands.describe(
+    buy_price="Buying price per item",
+    buy_quantity="Quantity to buy",
+    sell_price="Selling price per item",
+    sell_quantity="Quantity to sell"
+)
 async def invest_calc(interaction: discord.Interaction, buy_price: float, buy_quantity: int, sell_price: float, sell_quantity: int):
     health_checker.command_count += 1
     await interaction.response.defer()
-    inv = buy_price * buy_quantity
-    sales = sell_price * sell_quantity
-    tax = sales * 0.10
-    profit = (sales - tax) - inv
-    embed = discord.Embed(title="💹 Ω Lite Investment Report", color=0x10B981 if profit > 0 else 0xDC2626)
-    embed.add_field(name="Investment", value=f"{inv:,.0f} coins", inline=False)
-    embed.add_field(name="Sales (Before Tax)", value=f"{sales:,.0f} coins", inline=True)
-    embed.add_field(name="Tax (10%)", value=f"{tax:,.0f} coins", inline=True)
-    embed.add_field(name="Sales (After Tax)", value=f"{sales - tax:,.0f} coins", inline=False)
-    embed.add_field(name="Result", value=f"💰 Profit: {profit:,.0f}" if profit > 0 else f"📉 Loss: {abs(profit):,.0f}" if profit < 0 else "⚖️ Break Even", inline=False)
-    if profit > 0: embed.add_field(name="📈 ROI", value=f"{(profit/inv)*100:.2f}%", inline=True)
-    embed.set_footer(text="Ω Lite")
-    await interaction.followup.send(embed=embed)
+    
+    try:
+        TAX_RATE = 0.10
+        
+        total_investment = buy_price * buy_quantity
+        total_sales_before_tax = sell_price * sell_quantity
+        total_tax = total_sales_before_tax * TAX_RATE
+        total_sales_after_tax = total_sales_before_tax - total_tax
+        net_profit_loss = total_sales_after_tax - total_investment
+        
+        if net_profit_loss > 0:
+            result_text = f"💰 Profit: {net_profit_loss:,.2f} coins"
+            embed_color = 0x10B981
+        elif net_profit_loss < 0:
+            result_text = f"📉 Loss: {abs(net_profit_loss):,.2f} coins"
+            embed_color = 0xDC2626
+        else:
+            result_text = "⚖️ Break Even"
+            embed_color = 0x1E40AF
+        
+        embed = discord.Embed(title="💹 Ω Lite Investment Report", color=embed_color)
+        embed.add_field(name="Total Investment", value=f"{total_investment:,.2f} coins", inline=False)
+        embed.add_field(name="Total Sales (Before Tax)", value=f"{total_sales_before_tax:,.2f} coins", inline=True)
+        embed.add_field(name="Total Tax (10%)", value=f"{total_tax:,.2f} coins", inline=True)
+        embed.add_field(name="Total Sales (After Tax)", value=f"{total_sales_after_tax:,.2f} coins", inline=False)
+        embed.add_field(name="Result", value=result_text, inline=False)
+        
+        if net_profit_loss > 0:
+            roi = (net_profit_loss / total_investment) * 100
+            embed.add_field(name="📈 ROI", value=f"{roi:.2f}%", inline=True)
+        
+        embed.set_footer(text="Ω Lite")
+        await interaction.followup.send(embed=embed)
+            
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== TIMEZONE COMMANDS ==========
 
-@bot.tree.command(name="timezone", description="Convert timezone")
-@app_commands.describe(utc_time="UTC time or 'now'", timezone="e.g., EST, IST")
+@bot.tree.command(name="timezone", description="Convert UTC time to any timezone")
+@app_commands.describe(utc_time="UTC time or 'now'", timezone="Target timezone (e.g., EST, GMT, IST)")
 async def timezone_convert(interaction: discord.Interaction, utc_time: str, timezone: str):
     health_checker.command_count += 1
     await interaction.response.defer()
+    
     try:
-        if utc_time.lower() == 'now': utc_obj = datetime.now(pytz.UTC)
-        else: utc_obj = pytz.UTC.localize(datetime.strptime(utc_time, '%Y-%m-%d %H:%M:%S'))
-        tz = get_timezone_from_abbreviation(timezone)
-        if not tz:
-            await interaction.followup.send(f"❌ Unknown: {timezone}", ephemeral=True)
+        if utc_time.lower() == 'now':
+            utc_time_obj = datetime.now(pytz.UTC)
+        else:
+            try:
+                utc_time_obj = datetime.strptime(utc_time, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                try:
+                    utc_time_obj = datetime.strptime(utc_time, '%Y-%m-%d %H:%M')
+                except ValueError:
+                    await interaction.followup.send("❌ Use: YYYY-MM-DD HH:MM:SS", ephemeral=True)
+                    return
+            utc_time_obj = pytz.UTC.localize(utc_time_obj)
+        
+        target_tz = get_timezone_from_abbreviation(timezone)
+        
+        if target_tz is None:
+            await interaction.followup.send(f"❌ Unknown timezone: {timezone}", ephemeral=True)
             return
-        cv = utc_obj.astimezone(tz)
-        embed = discord.Embed(title="🕒 Time Conversion", color=0x8B5CF6)
-        embed.add_field(name="🌐 UTC", value=utc_obj.strftime('%Y-%m-%d %H:%M:%S'), inline=False)
-        embed.add_field(name="🎯 Converted", value=cv.strftime('%Y-%m-%d %H:%M:%S'), inline=False)
+        
+        converted_time = utc_time_obj.astimezone(target_tz)
+        
+        embed = discord.Embed(title="🕒 Ω Lite Time Conversion", color=0x8B5CF6)
+        embed.add_field(name="🌐 UTC", value=utc_time_obj.strftime('%Y-%m-%d %H:%M:%S'), inline=False)
+        embed.add_field(name="🎯 Converted", value=converted_time.strftime('%Y-%m-%d %H:%M:%S'), inline=False)
         embed.add_field(name="📍 Timezone", value=timezone.upper(), inline=True)
         embed.set_footer(text="Ω Lite")
         await interaction.followup.send(embed=embed)
-    except:
-        await interaction.followup.send("❌ Format: YYYY-MM-DD HH:MM:SS", ephemeral=True)
+        
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="datetotimestamp", description="Date to Unix timestamp")
-@app_commands.describe(date="YYYY-MM-DD", time="HH:MM:SS", timezone="e.g., UTC")
+@bot.tree.command(name="datetotimestamp", description="Convert date and time to Unix timestamp")
+@app_commands.describe(date="Date in YYYY-MM-DD", time="Time in HH:MM:SS", timezone="Timezone abbreviation")
 async def date_to_timestamp(interaction: discord.Interaction, date: str, time: str = "00:00:00", timezone: str = "UTC"):
     health_checker.command_count += 1
     await interaction.response.defer()
+    
     try:
-        dt = datetime.strptime(f"{date} {time}", '%Y-%m-%d %H:%M:%S')
-        if timezone.upper() != "UTC":
+        datetime_str = f"{date} {time}"
+        
+        try:
+            dt = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            try:
+                dt = datetime.strptime(f"{date} {time}", '%Y-%m-%d %H:%M')
+            except ValueError:
+                dt = datetime.strptime(date, '%Y-%m-%d')
+        
+        if timezone.upper() == "UTC":
+            dt = dt.replace(tzinfo=pytz.UTC)
+        else:
             tz = get_timezone_from_abbreviation(timezone)
-            if tz: dt = tz.localize(dt).astimezone(pytz.UTC)
-            else: dt = dt.replace(tzinfo=pytz.UTC)
-        else: dt = dt.replace(tzinfo=pytz.UTC)
-        ts = int(dt.timestamp())
+            if tz is None:
+                await interaction.followup.send(f"❌ Unknown timezone: {timezone}", ephemeral=True)
+                return
+            dt = tz.localize(dt)
+            dt = dt.astimezone(pytz.UTC)
+        
+        timestamp = int(dt.timestamp())
+        
         embed = discord.Embed(title="📅 Timestamp Converter", color=0x10B981)
-        embed.add_field(name="Unix", value=f"`{ts}`", inline=False)
-        embed.add_field(name="Discord", value=f"<t:{ts}:F>", inline=True)
-        embed.add_field(name="Relative", value=f"<t:{ts}:R>", inline=True)
-        embed.set_footer(text="Ω Lite")
+        embed.add_field(name="Unix Timestamp", value=f"`{timestamp}`", inline=False)
+        embed.add_field(name="Discord Timestamp", value=f"`<t:{timestamp}>` → <t:{timestamp}>", inline=False)
+        embed.add_field(name="Full Format", value=f"`<t:{timestamp}:F>` → <t:{timestamp}:F>", inline=False)
+        embed.add_field(name="Relative", value=f"`<t:{timestamp}:R>` → <t:{timestamp}:R>", inline=False)
+        embed.set_footer(text="Ω Lite | Use these in any Discord message")
         await interaction.followup.send(embed=embed)
-    except:
-        await interaction.followup.send("❌ Invalid date!", ephemeral=True)
+        
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== FORMATIONS COMMAND ==========
 
-@bot.tree.command(name="formations", description="Best formations")
-@app_commands.choices(game_mode=[app_commands.Choice(name="Manager Mode", value="manager_mode"), app_commands.Choice(name="VS Attack", value="vs_attack"), app_commands.Choice(name="Head to Head", value="head_to_head")])
+@bot.tree.command(name="formations", description="Get best formations for different game modes")
+@app_commands.choices(game_mode=[
+    app_commands.Choice(name="Manager Mode", value="manager_mode"),
+    app_commands.Choice(name="VS Attack", value="vs_attack"),
+    app_commands.Choice(name="Head to Head", value="head_to_head")
+])
 async def formations_command(interaction: discord.Interaction, game_mode: str):
-    formations = bot.formations_data["formations"].get(game_mode, [])
-    embed = discord.Embed(title=f"⚡ Ω Lite - {game_mode.replace('_',' ').title()} Formations", color=0x8B5CF6)
-    embed.add_field(name="Recommended", value="\n".join([f"• {f}" for f in formations]) if formations else "None", inline=False)
-    embed.set_footer(text="Ω Lite")
-    await interaction.response.send_message(embed=embed)
+    health_checker.command_count += 1
+    try:
+        formations_data = bot.formations_data
+        game_mode_display = {
+            "manager_mode": "Manager Mode",
+            "vs_attack": "VS Attack",
+            "head_to_head": "Head to Head"
+        }
+        
+        if game_mode not in formations_data["formations"]:
+            await interaction.response.send_message("❌ Invalid game mode!", ephemeral=True)
+            return
+        
+        formations_list = formations_data["formations"][game_mode]
+        
+        embed = discord.Embed(
+            title=f"⚡ Ω Lite - {game_mode_display[game_mode]} Formations",
+            color=0x8B5CF6
+        )
+        
+        formations_text = "\n".join([f"• {formation}" for formation in formations_list])
+        embed.add_field(name="Recommended Formations", value=formations_text, inline=False)
+        embed.set_footer(text="Ω Lite")
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== REDEEM CODE COMMANDS ==========
 
-@bot.tree.command(name="redeem", description="View FC Mobile codes")
+@bot.tree.command(name="redeem", description="View active FC Mobile redeem codes")
 async def redeem_codes(interaction: discord.Interaction):
+    health_checker.command_count += 1
     await interaction.response.defer()
-    codes = [c for c in bot.redeem_data.get("redeem_codes", []) if c.get("active", True)]
-    if not codes:
-        await interaction.followup.send("🎁 No active codes!")
-        return
-    desc = f"**{len(codes)} active**\n[Redeem here](https://redeem.fcm.ea.com)\n\n"
-    for c in codes: desc += f"`{c['code']}`\n🎁 {c.get('reward', 'N/A')}\n\n"
-    embed = discord.Embed(title="🎁 FC Mobile Codes", description=desc, color=0x10B981)
-    embed.set_footer(text="Ω Lite")
-    await interaction.followup.send(embed=embed)
-
-@bot.tree.command(name="redeem_add", description="Add redeem code (Admin)")
-@app_commands.describe(code="Code", reward="Reward", active="Active?")
-async def redeem_add(interaction: discord.Interaction, code: str, reward: str, active: bool = True):
-    if not can_manage_redeem_codes(interaction.user.id):
-        await interaction.response.send_message("❌ Not authorized!", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    for c in bot.redeem_data.get("redeem_codes", []):
-        if c["code"].upper() == code.upper():
-            await interaction.followup.send("❌ Code exists!", ephemeral=True)
+    
+    try:
+        redeem_codes_list = [code for code in bot.redeem_data["redeem_codes"] if code.get("active", True)]
+        
+        if not redeem_codes_list:
+            embed = discord.Embed(title="🎁 No Active Codes", color=0xF59E0B)
+            embed.set_footer(text="Ω Lite")
+            await interaction.followup.send(embed=embed)
             return
-    bot.redeem_data.setdefault("redeem_codes", []).append({"code": code.upper(), "reward": reward, "active": active})
-    save_redeem_codes(bot.redeem_data)
-    await interaction.followup.send(f"✅ Added `{code.upper()}`!", ephemeral=True)
+        
+        description = f"**{len(redeem_codes_list)} active code(s)**\n\n[Redeem here](https://redeem.fcm.ea.com)\n\n"
+        
+        for i, code in enumerate(redeem_codes_list, 1):
+            description += f"`{code['code']}`\n🎁 {code.get('reward', 'No reward')}\n\n"
+        
+        embed = discord.Embed(title="🎁 FC Mobile Codes", description=description, color=0x10B981)
+        embed.set_footer(text="Ω Lite")
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-@bot.tree.command(name="redeem_remove", description="Remove redeem code (Admin)")
+@bot.tree.command(name="redeem_add", description="Add redeem code (Authorized only)")
+@app_commands.describe(code="Code", reward="Reward", active="Active status")
+async def redeem_add(interaction: discord.Interaction, code: str, reward: str, active: bool = True):
+    health_checker.command_count += 1
+    if not can_manage_redeem_codes(interaction.user.id):
+        await interaction.response.send_message("❌ Authorized only!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        code_upper = code.upper()
+        for existing in bot.redeem_data["redeem_codes"]:
+            if existing["code"].upper() == code_upper:
+                await interaction.followup.send(f"❌ Code exists!", ephemeral=True)
+                return
+        
+        new_code = {
+            "code": code_upper, "reward": reward, "active": active,
+            "added_by": str(interaction.user.id), "added_by_name": interaction.user.name,
+            "added_at": datetime.now().isoformat()
+        }
+        
+        bot.redeem_data["redeem_codes"].append(new_code)
+        bot.redeem_data["last_updated"] = datetime.now().isoformat()
+        
+        if save_redeem_codes(bot.redeem_data):
+            await interaction.followup.send(f"✅ Added `{code_upper}`", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Failed to save!", ephemeral=True)
+            
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="redeem_remove", description="Remove redeem code (Authorized only)")
 @app_commands.describe(code="Code to remove")
 async def redeem_remove(interaction: discord.Interaction, code: str):
+    health_checker.command_count += 1
     if not can_manage_redeem_codes(interaction.user.id):
-        await interaction.response.send_message("❌ Not authorized!", ephemeral=True)
+        await interaction.response.send_message("❌ Authorized only!", ephemeral=True)
         return
+    
     await interaction.response.defer(ephemeral=True)
-    bot.redeem_data["redeem_codes"] = [c for c in bot.redeem_data.get("redeem_codes", []) if c["code"].upper() != code.upper()]
-    save_redeem_codes(bot.redeem_data)
-    await interaction.followup.send(f"✅ Removed `{code.upper()}`!", ephemeral=True)
+    
+    try:
+        removed = False
+        for i, rc in enumerate(bot.redeem_data["redeem_codes"]):
+            if rc["code"].upper() == code.upper():
+                bot.redeem_data["redeem_codes"].pop(i)
+                bot.redeem_data["last_updated"] = datetime.now().isoformat()
+                removed = True
+                break
+        
+        if removed and save_redeem_codes(bot.redeem_data):
+            await interaction.followup.send(f"✅ Removed `{code.upper()}`", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ Code not found!", ephemeral=True)
+            
+    except Exception as e:
+        health_checker.error_count += 1
+        health_checker.last_error = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
 # ========== SNIPE COMMANDS ==========
-
 @bot.tree.command(name="snipe", description="🔫 Show deleted messages (Role restricted)")
 @app_commands.describe(page="Which deleted message (1=latest)")
 @has_snipe_afk_role()
 async def snipe(interaction: discord.Interaction, page: int = 1):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=False)
+    
     if interaction.channel.id not in deleted_messages or not deleted_messages[interaction.channel.id]:
-        await interaction.followup.send("🔫 Nothing to snipe!", ephemeral=True)
-        return
+        await interaction.followup.send("🔫 Nothing to snipe!", ephemeral=True); return
+    
     messages = deleted_messages[interaction.channel.id]
     if page < 1 or page > len(messages):
-        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True)
-        return
+        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True); return
+    
     if len(messages) == 1:
         msg = messages[0]
-        td = (datetime.now() - msg["time"]).seconds
-        time_text = f"{td}s ago" if td < 60 else f"{td//60}m ago" if td < 3600 else f"{td//3600}h ago"
+        time_diff = (datetime.now() - msg["time"]).seconds
+        if time_diff < 60: time_text = f"{time_diff}s ago"
+        elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
+        else: time_text = f"{time_diff // 3600}h ago"
+        
         embed = discord.Embed(description=msg["content"][:2000], color=0xDC2626, timestamp=msg["time"])
         embed.set_author(name=f"🗑️ {msg['author']}", icon_url=msg["author_avatar"])
         embed.set_footer(text=f"Deleted {time_text}")
         if msg.get("attachments"):
             embed.add_field(name="📎 Attachments", value="\n".join(msg["attachments"][:3])[:1024], inline=False)
             if msg["attachments"]: embed.set_image(url=msg["attachments"][0])
-        await interaction.followup.send(embed=embed)
-        return
+        await interaction.followup.send(embed=embed); return
+    
     view = SnipePagination(messages, is_edit=False)
     view.current_page = page - 1
     view.update_buttons()
@@ -828,25 +1347,30 @@ async def snipe(interaction: discord.Interaction, page: int = 1):
 @app_commands.describe(page="Which edited message (1=latest)")
 @has_snipe_afk_role()
 async def editsnipe(interaction: discord.Interaction, page: int = 1):
+    health_checker.command_count += 1
     await interaction.response.defer(ephemeral=False)
+    
     if interaction.channel.id not in edited_messages or not edited_messages[interaction.channel.id]:
-        await interaction.followup.send("✏️ Nothing to editsnipe!", ephemeral=True)
-        return
+        await interaction.followup.send("✏️ Nothing to editsnipe!", ephemeral=True); return
+    
     messages = edited_messages[interaction.channel.id]
     if page < 1 or page > len(messages):
-        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True)
-        return
+        await interaction.followup.send(f"❌ Page 1-{len(messages)} only!", ephemeral=True); return
+    
     if len(messages) == 1:
         msg = messages[0]
-        td = (datetime.now() - msg["time"]).seconds
-        time_text = f"{td}s ago" if td < 60 else f"{td//60}m ago" if td < 3600 else f"{td//3600}h ago"
+        time_diff = (datetime.now() - msg["time"]).seconds
+        if time_diff < 60: time_text = f"{time_diff}s ago"
+        elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
+        else: time_text = f"{time_diff // 3600}h ago"
+        
         embed = discord.Embed(color=0xF59E0B, timestamp=msg["time"])
         embed.set_author(name=f"✏️ {msg['author']}", icon_url=msg["author_avatar"])
         embed.add_field(name="❌ Before", value=msg["before"][:1024] or "No content", inline=False)
         embed.add_field(name="✅ After", value=msg["after"][:1024] or "No content", inline=False)
         embed.set_footer(text=f"Edited {time_text}")
-        await interaction.followup.send(embed=embed)
-        return
+        await interaction.followup.send(embed=embed); return
+    
     view = SnipePagination(messages, is_edit=True)
     view.current_page = page - 1
     view.update_buttons()
@@ -855,69 +1379,63 @@ async def editsnipe(interaction: discord.Interaction, page: int = 1):
 @bot.tree.command(name="snipe_clear", description="🧹 Clear snipe history (Role restricted)")
 @has_snipe_afk_role()
 async def snipe_clear(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    
     cleared = 0
     if interaction.channel.id in deleted_messages: del deleted_messages[interaction.channel.id]; cleared += 1
     if interaction.channel.id in edited_messages: del edited_messages[interaction.channel.id]; cleared += 1
-    await interaction.response.send_message(f"🧹 Cleared {cleared} record(s)!" if cleared else "📭 Nothing!", ephemeral=True)
+    
+    if cleared: await interaction.response.send_message(f"🧹 Cleared {cleared} snipe record(s)!", ephemeral=True)
+    else: await interaction.response.send_message("📭 Nothing to clear!", ephemeral=True)
 
 # ========== AFK COMMANDS ==========
-
 @bot.tree.command(name="afk", description="💤 Set yourself as AFK (Role restricted)")
-@app_commands.describe(reason="Reason for being AFK")
+@app_commands.describe(reason="Reason for being AFK (optional)")
 @has_snipe_afk_role()
-async def afk(interaction: discord.Interaction, reason: str = "No reason"):
-    afk_users[interaction.user.id] = {"reason": reason, "time": datetime.now(), "name": interaction.user.display_name, "pings": []}
-    embed = discord.Embed(description=f"💤 **{interaction.user.display_name}** is now AFK: {reason}", color=0xF59E0B)
+async def afk(interaction: discord.Interaction, reason: str = "No reason provided"):
+    health_checker.command_count += 1
+    
+    afk_users[interaction.user.id] = {
+        "reason": reason,
+        "time": datetime.now(),
+        "name": interaction.user.display_name,
+        "pings": []
+    }
+    
+    embed = discord.Embed(
+        description=f"💤 **{interaction.user.display_name}** is now AFK: {reason}",
+        color=0xF59E0B
+    )
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="afk_list", description="📋 Show AFK users (Role restricted)")
+@bot.tree.command(name="afk_list", description="📋 Show all AFK users (Role restricted)")
 @has_snipe_afk_role()
 async def afk_list(interaction: discord.Interaction):
+    health_checker.command_count += 1
+    
     if not afk_users:
-        await interaction.response.send_message("✅ No one is AFK!", ephemeral=True)
-        return
+        await interaction.response.send_message("✅ No one is AFK right now!", ephemeral=True); return
+    
     embed = discord.Embed(title="💤 AFK Users", color=0xF59E0B)
     for uid, data in afk_users.items():
-        td = (datetime.now() - data["time"]).seconds
-        time_text = f"{td}s ago" if td < 60 else f"{td//60}m ago" if td < 3600 else f"{td//3600}h ago"
+        time_diff = (datetime.now() - data["time"]).seconds
+        if time_diff < 60: time_text = f"{time_diff}s ago"
+        elif time_diff < 3600: time_text = f"{time_diff // 60}m ago"
+        else: time_text = f"{time_diff // 3600}h ago"
         embed.add_field(name=data['name'], value=f"📝 {data['reason']}\n🕐 {time_text}", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ========== AUTO-MOD COMMANDS ==========
-
-@bot.tree.command(name="automod_set", description="🔧 Set multilingual channel (Owner)")
-@app_commands.describe(channel="Multilingual channel")
-async def automod_set(interaction: discord.Interaction, channel: discord.TextChannel):
-    if interaction.user.id not in [1214456066687893506, 553418145063239684]:
-        await interaction.response.send_message("❌ Owner only!", ephemeral=True)
-        return
-    MULTILINGUAL_CHANNELS.clear()
-    MULTILINGUAL_CHANNELS.append(channel.id)
-    embed = discord.Embed(title="✅ Auto-Mod Configured", description=f"**{channel.mention}** is now multilingual.\nAll other channels require English.", color=0x10B981)
-    embed.add_field(name="🔍 Detection", value="Language detection (langdetect)", inline=False)
-    embed.add_field(name="⚠️ Action", value="Delete + 10s warning", inline=False)
-    embed.add_field(name="🛡️ Exempt", value="Admins & owners", inline=False)
-    embed.set_footer(text="Ω Lite | Auto-Mod")
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="automod_status", description="📊 Auto-mod status")
-async def automod_status(interaction: discord.Interaction):
-    embed = discord.Embed(title="🛡️ Auto-Mod Status", color=0x8B5CF6)
-    if MULTILINGUAL_CHANNELS:
-        embed.add_field(name="🌍 Multilingual", value=", ".join([f"<#{ch_id}>" for ch_id in MULTILINGUAL_CHANNELS]), inline=False)
-    else:
-        embed.add_field(name="🌍 Multilingual", value="None set", inline=False)
-    embed.add_field(name="🔍 Detection", value="langdetect library", inline=False)
-    embed.add_field(name="⚠️ Action", value="Delete + 10s warn (1s cooldown)", inline=False)
-    embed.add_field(name="🛡️ Exempt", value="Admins & owners", inline=False)
-    embed.set_footer(text="Ω Lite | Auto-Mod")
+    
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ========== UTILITY COMMANDS ==========
-
-@bot.tree.command(name="ping", description="Check latency")
+@bot.tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
-    embed = discord.Embed(title="⚡ Ω Lite Status", description=f"**Latency:** {round(bot.latency*1000)}ms\n**Servers:** {len(bot.guilds)}", color=0x10B981)
+    health_checker.command_count += 1
+    latency = round(bot.latency * 1000)
+    embed = discord.Embed(
+        title="⚡ Ω Lite Status",
+        description=f"**Latency:** {latency}ms\n**Servers:** {len(bot.guilds)}",
+        color=0x10B981
+    )
     embed.set_footer(text="Ω Lite")
     await interaction.response.send_message(embed=embed)
 
@@ -926,21 +1444,32 @@ async def health_check_command(interaction: discord.Interaction):
     if interaction.user.id not in [1214456066687893506, 553418145063239684]:
         await interaction.response.send_message("❌ Not authorized!", ephemeral=True)
         return
-    h = health_checker.check_health()
-    embed = discord.Embed(title="🏥 Health Report", color=0x8B5CF6)
-    embed.add_field(name="⏱️ Uptime", value=h["uptime"], inline=False)
-    embed.add_field(name="📊 Commands", value=h["commands"], inline=True)
-    embed.add_field(name="❌ Errors", value=h["errors"], inline=True)
-    embed.add_field(name="🔌 Latency", value=f"{round(bot.latency*1000)}ms", inline=True)
+    
+    health = health_checker.check_health()
+    
+    embed = discord.Embed(title="🏥 Ω Lite Health Report", color=0x8B5CF6)
+    embed.add_field(name="⏱️ Uptime", value=health["uptime"], inline=False)
+    embed.add_field(name="📊 Commands Processed", value=health["commands"], inline=True)
+    embed.add_field(name="❌ Errors", value=health["errors"], inline=True)
+    embed.add_field(name="🔌 Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
     embed.add_field(name="🔄 Servers", value=len(bot.guilds), inline=True)
-    embed.set_footer(text="Ω Lite")
+    
+    try:
+        with db_connection('lfm.db') as conn:
+            conn.cursor().execute("SELECT 1")
+        embed.add_field(name="🗄️ Database", value="✅ Connected", inline=True)
+    except:
+        embed.add_field(name="🗄️ Database", value="❌ Error", inline=True)
+    
+    embed.set_footer(text="Ω Lite | Health Monitor")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="sync", description="Sync commands (Owner - ONCE!)")
+@bot.tree.command(name="sync", description="Sync commands (Owner only - use ONCE!)")
 async def sync_commands(interaction: discord.Interaction):
     if interaction.user.id != 1214456066687893506:
         await interaction.response.send_message("❌ Owner only!", ephemeral=True)
         return
+    
     await interaction.response.defer(ephemeral=True)
     try:
         synced = await bot.tree.sync()
@@ -950,11 +1479,11 @@ async def sync_commands(interaction: discord.Interaction):
 
 @bot.tree.command(name="timezones", description="List timezones")
 async def timezone_help(interaction: discord.Interaction):
-    embed = discord.Embed(title="🌍 Timezones", color=0x8B5CF6)
-    embed.add_field(name="Americas", value="EST, CST, MST, PST", inline=False)
-    embed.add_field(name="Europe", value="GMT, BST, UTC, CET", inline=False)
-    embed.add_field(name="Asia", value="IST, JST, KST, HKT, SGT", inline=False)
-    embed.add_field(name="Oceania", value="AEST, ACST, AWST, NZST", inline=False)
+    embed = discord.Embed(title="🌍 Timezone Abbreviations", color=0x8B5CF6)
+    embed.add_field(name="Americas", value="EST, CST, MST, PST, EDT, CDT, MDT, PDT", inline=False)
+    embed.add_field(name="Europe", value="GMT, BST, UTC, CET, CEST, EET, EEST", inline=False)
+    embed.add_field(name="Asia", value="IST, JST, KST, HKT, SGT, PHT, PKT", inline=False)
+    embed.add_field(name="Oceania", value="AEST, AEDT, ACST, AWST, NZST", inline=False)
     embed.set_footer(text="Ω Lite")
     await interaction.response.send_message(embed=embed)
 
@@ -963,10 +1492,12 @@ async def backup_command(interaction: discord.Interaction):
     if interaction.user.id not in [1214456066687893506, 553418145063239684]:
         await interaction.response.send_message("❌ Not authorized!", ephemeral=True)
         return
+    
     await interaction.response.defer()
     files = [discord.File(f) for f in ['announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json'] if os.path.exists(f)]
     if files:
-        embed = discord.Embed(title="📦 Backup", description=f"**Files:** {len(files)}", color=0x10B981)
+        embed = discord.Embed(title="📦 Backup Complete", description=f"**Files:** {len(files)}", color=0x10B981)
+        embed.add_field(name="Files included", value="\n".join([f"• {f}" for f in ['announcements.db', 'lfm.db', 'redeem_codes.json', 'formations.json'] if os.path.exists(f)]), inline=False)
         embed.set_footer(text="Ω Lite")
         await interaction.followup.send(embed=embed, files=files)
     else:
@@ -977,6 +1508,7 @@ async def restore_command(interaction: discord.Interaction, file: discord.Attach
     if interaction.user.id not in [1214456066687893506, 553418145063239684]:
         await interaction.response.send_message("❌ Not authorized!", ephemeral=True)
         return
+    
     await interaction.response.defer(ephemeral=True)
     try:
         data = await file.read()
@@ -987,17 +1519,23 @@ async def restore_command(interaction: discord.Interaction, file: discord.Attach
 
 @bot.tree.command(name="help", description="Show all commands")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="⚡ Ω Lite - Help", description="**FC Mobile Discord Bot**", color=0x8B5CF6)
-    embed.add_field(name="🎮 Game", value="`/ovr` `/invest` `/formations`", inline=False)
-    embed.add_field(name="🌍 Time", value="`/timezone` `/datetotimestamp` `/timezones`", inline=False)
-    embed.add_field(name="🎁 Rewards", value="`/redeem`", inline=False)
-    embed.add_field(name="🎮 Pings", value="`/lfm` `/squadhelp` `/drhelp` `/eventping`", inline=False)
-    embed.add_field(name="📢 Announce", value="`/announce` `/announce_list` `/announce_cancel`", inline=False)
-    embed.add_field(name="🔫 Snipe", value="`/snipe` `/editsnipe` `/snipe_clear`", inline=False)
-    embed.add_field(name="💤 AFK", value="`/afk` `/afk_list`", inline=False)
-    embed.add_field(name="🛡️ Auto-Mod", value="`/automod_set` `/automod_status`", inline=False)
-    embed.add_field(name="💾 Backup", value="`/backup` `/restore`", inline=False)
-    embed.add_field(name="🔧 Utils", value="`/ping` `/help` `/health` `/sync`", inline=False)
+    embed = discord.Embed(
+        title="⚡ Ω Lite - Help",
+        description="**FC Mobile Discord Bot**",
+        color=0x8B5CF6
+    )
+    
+    embed.add_field(name="🎮 **Game Tools**", value="`/ovr` - Calculate team OVR\n`/invest` - Investment calculator\n`/formations` - Best formations", inline=False)
+    embed.add_field(name="🌍 **Time Tools**", value="`/timezone` - Convert timezones\n`/datetotimestamp` - Get Discord timestamps\n`/timezones` - List abbreviations", inline=False)
+    embed.add_field(name="🎁 **Rewards**", value="`/redeem` - View FC Mobile codes", inline=False)
+    embed.add_field(name="🎮 **Ping Roles**", value="`/lfm` - Looking for match (5-min)\n`/squadhelp` - Squad help (15-min)\n`/drhelp` - DR help (5-min)\n`/eventping` - Event ping (15-min)", inline=False)
+    embed.add_field(name="📢 **Announcements**", value="`/announce` - Schedule announcement\n`/announce_list` - View yours\n`/announce_cancel` - Cancel", inline=False)
+    embed.add_field(name="🔫 **Snipe (Role)**", value="`/snipe` - Show deleted messages\n`/editsnipe` - Show edited messages\n`/snipe_clear` - Clear history", inline=False)
+    embed.add_field(name="💤 **AFK (Role)**", value="`/afk` - Set yourself AFK\n`/afk_list` - View AFK users", inline=False)
+    embed.add_field(name="💾 **Backup & Restore**", value="`/backup` - Download data\n`/restore` - Restore data", inline=False)
+    embed.add_field(name="🔧 **Utilities**", value="`/ping` - Check status\n`/help` - This menu\n`/health` - Bot stats (Admin)\n`/sync` - Sync commands (Owner)", inline=False)
+    embed.add_field(name="📝 **Getting Timestamps**", value="Use `/datetotimestamp` to get Unix timestamps for scheduling announcements!", inline=False)
+    
     embed.set_footer(text="Ω Lite | Made for FC Mobile")
     await interaction.response.send_message(embed=embed)
 
